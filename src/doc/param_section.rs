@@ -33,63 +33,6 @@ pub struct ParamSectionKind {
     pub parameter_noun: &'static str,
 }
 
-/// A section of a docstring whose top-level bullets each document one parameter.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ParamSection {
-    /// The position of the section's header.
-    pub header: Position,
-
-    /// The section's top-level bullets, in source order. Sub-bullets belong to their bullet.
-    pub bullets: Vec<ParamBullet>,
-
-    /// The positions of the later headers with the same title and level.
-    pub duplicate_headers: Vec<Position>,
-}
-
-/// A top-level bullet of a [`ParamSection`].
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ParamBullet {
-    /// The name the bullet documents: the code of the code span or code link the bullet starts
-    /// with, such as `T`, `'a` or `job_id`. [`None`] if the bullet starts with neither.
-    pub name: Option<String>,
-
-    /// Whether the bullet has the canonical form ``* `name` - description``: a bare code span
-    /// followed by [`CANONICAL_SEPARATOR`] and a non-blank description.
-    pub is_canonical: bool,
-
-    /// The position of the bullet's first line.
-    pub position: Position,
-}
-
-/// A mismatch between a [`ParamSection`] and the parameters of its item.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ParamFinding {
-    pub kind: ParamFindingKind,
-    pub position: Position,
-}
-
-/// The kinds of [`ParamFinding`].
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ParamFindingKind {
-    /// A second header with the section's title at the section's level.
-    DuplicateHeader,
-
-    /// A bullet that doesn't start with a code span or a code link.
-    NamelessBullet,
-
-    /// A bullet that names a parameter, but not in the canonical form.
-    NonCanonicalBullet { name: String },
-
-    /// A bullet that names something that isn't a parameter of the item.
-    UnknownName { name: String },
-
-    /// A bullet that names a parameter an earlier bullet on `first_line` already names.
-    DuplicateBullet { name: String, first_line: usize },
-
-    /// A parameter that no bullet names. It is reported at the section's header.
-    Missing { name: String },
-}
-
 impl ParamSectionKind {
     /// Finds and parses the section with this kind's title, as [`section::find`] selects it.
     ///
@@ -172,6 +115,19 @@ impl ParamSectionKind {
     }
 }
 
+/// A section of a docstring whose top-level bullets each document one parameter.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParamSection {
+    /// The position of the section's header.
+    pub header: Position,
+
+    /// The section's top-level bullets, in source order. Sub-bullets belong to their bullet.
+    pub bullets: Vec<ParamBullet>,
+
+    /// The positions of the later headers with the same title and level.
+    pub duplicate_headers: Vec<Position>,
+}
+
 impl ParamSection {
     /// Compares the section with the parameters of its item, which must have at least one:
     ///
@@ -245,6 +201,50 @@ impl ParamSection {
         );
         findings
     }
+}
+
+/// A top-level bullet of a [`ParamSection`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParamBullet {
+    /// The name the bullet documents: the code of the code span or code link the bullet starts
+    /// with, such as `T`, `'a` or `job_id`. [`None`] if the bullet starts with neither.
+    pub name: Option<String>,
+
+    /// Whether the bullet has the canonical form ``* `name` - description``: a bare code span
+    /// followed by [`CANONICAL_SEPARATOR`] and a non-blank description.
+    pub is_canonical: bool,
+
+    /// The position of the bullet's first line.
+    pub position: Position,
+}
+
+/// A mismatch between a [`ParamSection`] and the parameters of its item.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParamFinding {
+    pub kind: ParamFindingKind,
+    pub position: Position,
+}
+
+/// The kinds of [`ParamFinding`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ParamFindingKind {
+    /// A second header with the section's title at the section's level.
+    DuplicateHeader,
+
+    /// A bullet that doesn't start with a code span or a code link.
+    NamelessBullet,
+
+    /// A bullet that names a parameter, but not in the canonical form.
+    NonCanonicalBullet { name: String },
+
+    /// A bullet that names something that isn't a parameter of the item.
+    UnknownName { name: String },
+
+    /// A bullet that names a parameter an earlier bullet on `first_line` already names.
+    DuplicateBullet { name: String, first_line: usize },
+
+    /// A parameter that no bullet names. It is reported at the section's header.
+    Missing { name: String },
 }
 
 /// Parses the joined text of one top-level bullet at `position`.

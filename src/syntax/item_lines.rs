@@ -42,13 +42,6 @@ pub fn collect(syntax_tree: &syn::File) -> Vec<ItemLines> {
 /// # Returns
 ///
 /// The lines of `item`, or [`None`] if it has no token after its outer attributes.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the stubs of the new rules use it once they are implemented"
-    )
-)]
 pub fn of(item: &impl ToTokens) -> Option<ItemLines> {
     lines_of(item.to_token_stream())
 }

@@ -98,6 +98,16 @@ impl PassThrough {
     }
 }
 
+/// # Returns
+///
+/// The values that `expr` may evaluate to, looking through parentheses, blocks, `if` and `match`. A
+/// `return` expression is left out, since its value is an outcome of its own.
+pub fn outcome_leaves(expr: &syn::Expr) -> Vec<&syn::Expr> {
+    let mut leaf_collector = LeafCollector { leaves: Vec::new() };
+    leaf_collector.collect(expr);
+    leaf_collector.leaves
+}
+
 /// A top-level `let Variant(binding) = param` statement of a helper, with or without `else`.
 struct Destructuring {
     /// The segment names of the matched tuple variant's path, such as `["DbError", "Sql"]`.
@@ -139,16 +149,6 @@ impl Destructuring {
             scope_start: span::start_position(local.semi_token.span),
         })
     }
-}
-
-/// # Returns
-///
-/// The values that `expr` may evaluate to, looking through parentheses, blocks, `if` and `match`. A
-/// `return` expression is left out, since its value is an outcome of its own.
-pub fn outcome_leaves(expr: &syn::Expr) -> Vec<&syn::Expr> {
-    let mut leaf_collector = LeafCollector { leaves: Vec::new() };
-    leaf_collector.collect(expr);
-    leaf_collector.leaves
 }
 
 /// Collects the leaves of [`outcome_leaves`].
