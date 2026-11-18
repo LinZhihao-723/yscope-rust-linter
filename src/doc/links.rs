@@ -160,6 +160,10 @@ pub fn references(text: &str, definitions: &LinkDefinitions) -> Vec<Reference> {
 }
 
 /// A code span found at a backtick run.
+///
+/// # Type Parameters
+///
+/// * `'text` - The lifetime of the text the code span is in.
 struct CodeSpan<'text> {
     code: &'text str,
     end: usize,

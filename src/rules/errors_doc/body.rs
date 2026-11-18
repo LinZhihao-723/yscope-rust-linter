@@ -196,6 +196,10 @@ impl Spellings {
 
 /// Scans the body of `fn_item`. A recursive call of the fn forwards nothing.
 ///
+/// # Type Parameters
+///
+/// * `'ast` - The lifetime of the syntax tree the fn is in.
+///
 /// # Returns
 ///
 /// The facts of the fn's body. Paths are normalized with the fn's scope, and helpers are resolved
@@ -372,6 +376,11 @@ impl Site {
 }
 
 /// The `syn` visitor behind [`scan`].
+///
+/// # Type Parameters
+///
+/// * `'context` - The lifetime of the fn and the file index the scan reads.
+/// * `'ast` - The lifetime of the syntax tree the fn is in.
 struct BodyScanner<'context, 'ast> {
     fn_item: &'context FnItem<'ast>,
     file_index: &'context FileIndex<'ast>,
@@ -2026,6 +2035,10 @@ impl<'node> Visit<'node> for BodyScanner<'_, '_> {
 }
 
 /// Looks for a plain path with a given name.
+///
+/// # Type Parameters
+///
+/// * `'name` - The lifetime of the name looked for.
 struct IdentFinder<'name> {
     name: &'name str,
     is_found: bool,
@@ -2462,6 +2475,10 @@ fn is_error_constructor(expr: &syn::Expr) -> bool {
 /// Finds an `Err(wrapping)` call in `expr` that builds an error around `binding`, such as
 /// `Err(Error::Cache(error))` or `return Err(Error::Db { source: error })`, looking into `return`
 /// and block statements.
+///
+/// # Type Parameters
+///
+/// * `'expr` - The lifetime of `expr`.
 ///
 /// # Returns
 ///

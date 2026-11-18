@@ -16,6 +16,10 @@ use crate::syntax::symbol_path::is_upper_camel_case;
 use crate::syntax::types::type_last_segment;
 
 /// What the `errors-doc` checks need to know about the whole file a fn is in.
+///
+/// # Type Parameters
+///
+/// * `'ast` - The lifetime of the file's syntax tree.
 #[derive(Default)]
 pub struct FileIndex<'ast> {
     /// Every fn with a body in the file (free fns, inherent and trait impl methods, trait default
@@ -368,6 +372,10 @@ impl<'ast> Visit<'ast> for FileIndex<'ast> {
 }
 
 /// A fn body of the file, with its signature and the type or trait it belongs to.
+///
+/// # Type Parameters
+///
+/// * `'ast` - The lifetime of the file's syntax tree.
 #[derive(Clone, Copy)]
 pub struct HelperFn<'ast> {
     /// The last segment of the impl's self type, or the trait's name, or [`None`] for a free fn.
@@ -380,6 +388,10 @@ pub struct HelperFn<'ast> {
 /// Collects the expressions through which an error may leave a fn body or a closure: the values of
 /// its `return` expressions and the operands of its `?` expressions, outside nested closures, async
 /// blocks and items.
+///
+/// # Type Parameters
+///
+/// * `'ast` - The lifetime of the syntax tree being walked.
 #[derive(Default)]
 pub struct ExitCollector<'ast> {
     pub returned: Vec<&'ast syn::Expr>,

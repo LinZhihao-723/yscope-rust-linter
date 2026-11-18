@@ -5,6 +5,10 @@
 //! follows it.
 
 /// An ATX header line, such as `# Errors`.
+///
+/// # Type Parameters
+///
+/// * `'text` - The lifetime of the line the header is in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AtxHeader<'text> {
     pub level: usize,
@@ -25,6 +29,10 @@ pub struct FenceTracker {
 }
 
 /// The marker of a list item line, such as `* ` or `1. `.
+///
+/// # Type Parameters
+///
+/// * `'text` - The lifetime of the line the marker is in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BulletMarker<'text> {
     /// The indent of the marker.
@@ -38,6 +46,10 @@ pub struct BulletMarker<'text> {
 }
 
 /// The first line of a link reference definition, such as ``[`Foo`]: crate::foo::Foo``.
+///
+/// # Type Parameters
+///
+/// * `'text` - The lifetime of the line the definition is in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LinkDefinitionLine<'text> {
     pub label: &'text str,

@@ -7,6 +7,10 @@ use crate::rules::greedy_wrap::line_kind::Body;
 use crate::rules::greedy_wrap::line_kind::LineKind;
 
 /// Two consecutive comment lines of the same paragraph, so the fit test applies to them.
+///
+/// # Type Parameters
+///
+/// * `'comment` - The lifetime of the comment lines.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct JoinablePair<'comment> {
     pub line: &'comment CommentLine,

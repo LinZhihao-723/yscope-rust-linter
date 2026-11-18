@@ -118,6 +118,11 @@ struct Finding {
 }
 
 /// The comparison of one fn's `# Errors` section with its body.
+///
+/// # Type Parameters
+///
+/// * `'check` - The lifetime of the fn, its section and the facts compared.
+/// * `'ast` - The lifetime of the syntax tree the fn is in.
 struct FnCheck<'check, 'ast> {
     fn_item: &'check FnItem<'ast>,
     section: &'check ErrorsSection,
@@ -728,6 +733,10 @@ struct Coverage {
 
 /// What makes two obligations the same one: an `EitherUnknown` is identified by its callee only,
 /// since its mapper description is only for messages.
+///
+/// # Type Parameters
+///
+/// * `'check` - The lifetime of the obligation the key identifies.
 #[derive(PartialEq, Eq, Hash)]
 enum ObligationKey<'check> {
     Direct {

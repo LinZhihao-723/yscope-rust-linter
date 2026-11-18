@@ -42,6 +42,10 @@ pub enum LineKind {
 }
 
 /// The text of a comment line after its marker, without the one space that usually follows it.
+///
+/// # Type Parameters
+///
+/// * `'text` - The lifetime of the comment line's text.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Body<'text> {
     text: &'text str,

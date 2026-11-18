@@ -143,6 +143,10 @@ impl SymbolPath {
     /// Builds a path from raw segments, dropping a leading empty segment (from `::`) and any
     /// leading `crate`, `self` or `super` segments.
     ///
+    /// # Type Parameters
+    ///
+    /// * `'segment` - The lifetime of the raw segments.
+    ///
     /// # Returns
     ///
     /// The path, or [`None`] if no segment is left or a segment isn't an identifier.

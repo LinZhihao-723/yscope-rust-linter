@@ -9,14 +9,6 @@
     )
 )]
 pub mod crate_names;
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the stubs of type-params-doc and trait-params-doc use it once they are \
-                  implemented"
-    )
-)]
 pub mod doc_items;
 pub mod item_lines;
 pub mod span;

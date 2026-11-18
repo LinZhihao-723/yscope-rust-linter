@@ -152,6 +152,10 @@ pub fn outcome_leaves(expr: &syn::Expr) -> Vec<&syn::Expr> {
 }
 
 /// Collects the leaves of [`outcome_leaves`].
+///
+/// # Type Parameters
+///
+/// * `'ast` - The lifetime of the syntax tree the leaves are in.
 struct LeafCollector<'ast> {
     leaves: Vec<&'ast syn::Expr>,
 }
