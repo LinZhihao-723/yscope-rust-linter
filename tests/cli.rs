@@ -211,6 +211,29 @@ fn include_tests_flag_checks_test_fns() {
 }
 
 #[test]
+fn symbol_order_skips_out_of_line_test_modules_unless_tests_are_included() {
+    let directory =
+        test_directory("symbol_order_skips_out_of_line_test_modules_unless_tests_are_included");
+    write_file(&directory, "src/lib.rs", "#[cfg(test)]\nmod tests;\n");
+    write_file(&directory, "src/tests.rs", "fn a() {}\npub fn b() {}\n");
+    let output = run(&directory, &["--rule", "symbol-order", "src"], "");
+    assert_eq!(output.status.code(), Some(0));
+
+    let output = run(
+        &directory,
+        &["--rule", "symbol-order", "--include-tests", "src"],
+        "",
+    );
+    assert_eq!(
+        stdout_lines(&output),
+        [
+            "src/tests.rs:2:1: symbol-order: pub fn `b` should come before private fn `a`: pub \
+             items come before private items"
+        ]
+    );
+}
+
+#[test]
 fn undecidable_test_module_is_one_parse_error_that_names_the_asking_rules() {
     let directory =
         test_directory("undecidable_test_module_is_one_parse_error_that_names_the_asking_rules");
@@ -331,6 +354,36 @@ fn diff_that_deletes_a_forwards_bullet_reports_the_missing_forward() {
         [
             "src/lib.rs:10:11: errors-doc: `load` forwards errors from `read`, but `# Errors` \
              does not list it; add \"* Forwards [`read`]'s return values on failure.\""
+        ]
+    );
+}
+
+#[test]
+fn diff_that_inserts_a_misplaced_item_reports_the_item_it_displaces() {
+    let directory =
+        test_directory("diff_that_inserts_a_misplaced_item_reports_the_item_it_displaces");
+    write_file(
+        &directory,
+        "src/lib.rs",
+        "pub fn a() {}\nfn b() {}\npub fn c() {}\nmod m {\n    fn d() {}\n    pub fn e() {}\n}\n",
+    );
+    let diff_text = "\
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -1,0 +2 @@
++fn b() {}
+";
+    let output = run(
+        &directory,
+        &["--rule", "symbol-order", "--diff", "-"],
+        diff_text,
+    );
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(
+        stdout_lines(&output),
+        [
+            "src/lib.rs:3:1: symbol-order: pub fn `c` should come after pub fn `a`: pub items \
+             come before private items"
         ]
     );
 }

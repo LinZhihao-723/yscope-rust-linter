@@ -145,8 +145,11 @@ Rules:
   `symbol.rs` (matching), `file_index.rs` (per-file index), `body.rs` (body scan), `pass_through.rs`
   (helper pass-through), `macros.rs` (macro handling), `known_apis.rs` (library API tables) and
   `check.rs` (the `Checker` and the comparison).
-* `src/rules/symbol_order/`, `src/rules/type_params_doc/` and `src/rules/trait_params_doc/`: each a
-  `check.rs` with the rule's `Checker`, plus whatever modules the rule needs.
+* `src/rules/symbol_order/`: `scope.rs` (the counted items of a scope and their keys), `keys.rs`
+  (sort keys and reasons), `moves.rs` (the kept subsequence and placements) and `check.rs` (the
+  `Checker`, the scope walk and the diagnostics).
+* `src/rules/type_params_doc/` and `src/rules/trait_params_doc/`: each a `check.rs` with the rule's
+  `Checker`, plus whatever modules the rule needs.
 
 Tests:
 
@@ -1253,7 +1256,8 @@ or rustfmt's `reorder_impl_items`.
 
 Unless `--include-tests`, an out-of-line test module file is skipped, as
 `FileContext::is_test_module` decides, and so is every item with `#[cfg(test)]` (or a `cfg(all(..))`
-that requires `test`), including whole `mod tests` blocks. With `--include-tests`, those items are
+that requires `test`), including whole `mod tests` blocks and inherent impl blocks, and every fn
+with a `#[test]`-like attribute, as `doc_items` skips them. With `--include-tests`, those items are
 counted like any other, and the body of a `#[cfg(test)] mod tests` is checked as a module.
 
 In a module, these items are exempt: they are neither checked nor counted, so they may sit anywhere,
@@ -1281,16 +1285,17 @@ In a module, the key is `(group, category, anchor, impl rank)`:
 * `category`: const 0, static 1, type 2, fn 3. Structs, enums, unions, traits, trait aliases and
   type aliases are all types, in any order among themselves, and an impl block has its type's
   category.
-* `anchor`: for a type, its own index among the counted items; for an impl block, its type's index;
-  0 for consts, statics and fns. Types never conflict on it, since their indices increase in source
-  order, and it puts each impl block right after its own type.
+* `anchor`: for a type, its index in the module's items; for an impl block, its type's index; 0 for
+  consts, statics and fns. Types never conflict on it, since their indices increase in source order,
+  and it puts each impl block right after its own type.
 * `impl rank`: 0 for the type itself, 1 for an inherent impl, 2 for an impl of a crate-local trait,
   3 for an impl of any other trait.
 
 An impl block belongs to a type when its self type, without parentheses, is a path of exactly one
 segment (generic arguments allowed) that names a struct, enum or union defined in the same module.
 `impl crate::a::Foo`, `impl<T> Trait for T`, `impl Trait for &Foo`, `impl dyn Trait` and impls on
-type aliases are exempt.
+type aliases are exempt. When the module defines the name more than once, as `#[cfg]` variants do,
+the impl block belongs to the nearest definition before it, or else to the first one.
 
 A trait is crate-local when `CrateNames::is_crate_path` (`syntax/crate_names.rs`) holds for its
 path: the path starts with `crate`, `self` or `super`, or its first segment is a trait or module the
@@ -1313,13 +1318,17 @@ set of moves does.
 
 Among the longest subsequences, the rule keeps the one whose indices are lexicographically smallest,
 so for equally long choices the earlier items stay and the later ones move. With `pub a`, `fn b`,
-`pub c`, the kept items are `pub a` and `pub c`, and `fn b` is flagged. With `fn a`, `pub b`, either
+`pub c`, the kept items are `pub a` and `fn b`, and `pub c` is flagged. With `fn a`, `pub b`, either
 item could move, and `pub b` is flagged.
 
 The sequence is found by the quadratic dynamic program: the length `L[i]` of the longest
 non-decreasing subsequence that starts at each index, then a greedy walk that starts at the smallest
 `i` with the maximum `L[i]` and steps to the smallest later `j` with `key[j] >= key[i]` and `L[j] =
 L[i] - 1`. Scopes hold at most a few hundred items, so the quadratic cost is negligible.
+
+A flagged item always conflicts with some kept item: with no larger kept item before it and no
+smaller kept item after it, it would extend the kept subsequence. `moves::place` returns `None` in
+that impossible case, and the item gets no diagnostic rather than a panic.
 
 ### symbol-order diagnostics
 
@@ -1333,8 +1342,9 @@ visibility, or its keyword):
 * `<item>` and `<reference>` describe an item by its group, its kind and its name, such as
   ``pub(crate) fn `load` `` or ``private struct `State` ``, and the same way inside an inherent
   impl, such as ``pub const `LIMIT` ``. An impl block is described without a group, as
-  ``impl `State` `` or ``impl `Display for State` ``. A trait's path segments are joined by `::`,
-  and its generic arguments are dropped.
+  ``impl `State` `` or ``impl `Display for State` ``, and a negative impl as
+  ``impl `!Send for State` ``. A trait's path segments are joined by `::`, and its generic
+  arguments are dropped, as are the self type's.
 * `<reference>` is the last kept item whose key is at most the flagged item's key, with `after`. If
   there is none, it is the first kept item, with `before`. So a misplaced impl block is told to come
   after its type or its type's last kept impl.

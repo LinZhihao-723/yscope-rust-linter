@@ -2,5 +2,8 @@
 //! ordering convention.
 
 mod check;
+mod keys;
+mod moves;
+mod scope;
 
 pub use check::Checker;
