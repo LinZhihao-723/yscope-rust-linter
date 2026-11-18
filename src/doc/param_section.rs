@@ -33,6 +33,10 @@ pub struct ParamSectionKind {
 impl ParamSectionKind {
     /// Finds and parses the section with this kind's title, as [`section::find`] selects it.
     ///
+    /// The section's top-level bullets form lists, each starting at the first bullet or at a bullet
+    /// that follows prose. A list that follows prose and has no bullet naming a parameter belongs
+    /// to that prose, so its bullets are dropped.
+    ///
     /// # Returns
     ///
     /// The parsed section, or [`None`] if the docstring has no such section.
@@ -43,8 +47,22 @@ impl ParamSectionKind {
         let bullets = doc_section
             .content(doc_lines, &definitions)
             .bullets
-            .iter()
-            .map(|bullet| parse_bullet(&bullet.text, bullet.position, &definitions))
+            .chunk_by(|_, next| !next.follows_prose)
+            .flat_map(|list| {
+                let param_bullets: Vec<ParamBullet> = list
+                    .iter()
+                    .map(|bullet| parse_bullet(&bullet.text, bullet.position, &definitions))
+                    .collect();
+                let is_prose_list = list[0].follows_prose
+                    && param_bullets
+                        .iter()
+                        .all(|bullet| bullet.form == BulletForm::Nameless);
+                if is_prose_list {
+                    Vec::new()
+                } else {
+                    param_bullets
+                }
+            })
             .collect();
         Some(ParamSection {
             header: doc_section.header,
@@ -371,6 +389,22 @@ mod tests {
                 (non_canonical("session_id"), 6),
                 (BulletForm::Nameless, 7),
                 (BulletForm::Nameless, 8),
+            ]
+        );
+    }
+
+    #[test]
+    fn nameless_lists_after_prose_belong_to_the_prose() {
+        let text = "# Type Parameters\n\nThe parameters are forwarded. Short names are used \
+                    to:\n\n* Reduce verbosity.\n* Avoid wrapping.\n\nThey are:\n\n* `R` - The \
+                    receiver.\n* The sender.\n\nNotes:\n\n* `Unknown` is a code \
+                    span.\n\nRemarks:\n\n* A remark.";
+        assert_eq!(
+            bullets(text, TYPE_PARAMETERS),
+            [
+                (canonical("R"), 10),
+                (BulletForm::Nameless, 11),
+                (non_canonical("Unknown"), 15),
             ]
         );
     }

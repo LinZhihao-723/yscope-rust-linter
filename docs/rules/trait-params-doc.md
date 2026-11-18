@@ -145,7 +145,9 @@ The section follows the y-scope Rust style guide, with one top-level bullet per 
   description. The description may continue on the next lines, and may have sub-bullets.
 * A bullet that starts with a code link, such as ``* [`job_id`] - ...``, or uses another separator,
   such as ``* `job_id`: ...``, still documents its parameter, but is reported.
-* The bullets may come in any order. Prose in the section is ignored.
+* The bullets may come in any order. Prose in the section is ignored, and so is a list that the
+  prose introduces: the bullets after a prose paragraph, through the next prose, belong to it when
+  none of them starts with a code span or a code link.
 
 ```rust
 /// A store of jobs.
@@ -189,7 +191,7 @@ Every diagnostic has the code `trait-params-doc`.
 | `` `# Parameters` documents `x`, which isn't a parameter of trait method `f`; remove the bullet `` | The bullet names something that isn't a parameter. | Remove the bullet, or fix the name. |
 | `` `a` is already documented on line N; remove this bullet `` | Two bullets name `a`. | Merge them. |
 | `` write this `# Parameters` bullet as "* `a` - description" `` | The bullet names `a`, but not with a bare code span followed by ` - ` and a description. | Rewrite the bullet. |
-| `` this `# Parameters` bullet doesn't start with the parameter it documents; write "* `name` - description" `` | The bullet starts with prose. | Start it with the parameter's name. |
+| `` this `# Parameters` bullet doesn't start with the parameter it documents; write "* `name` - description" `` | The bullet starts with prose, and isn't in a list that prose introduces. | Start it with the parameter's name. |
 | `` the docstring has a second `# Parameters` section at the same level; merge them `` | Two `Parameters` headers of the same level. | Merge the sections. |
 
 `I` is the item, such as ``fn `start` ``, ``method `new` ``, ``trait impl method `submit` `` or

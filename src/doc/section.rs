@@ -74,6 +74,10 @@ pub struct Bullet {
     /// The column, counted from the start of the line, where the bullet's text starts.
     content_indent: usize,
 
+    /// Whether a prose paragraph of the section comes right before the bullet, with no bullet
+    /// between them.
+    pub follows_prose: bool,
+
     pub sub_bullets: Vec<SubBullet>,
 }
 
@@ -180,6 +184,7 @@ impl ContentBuilder<'_> {
         let mut fence_tracker = FenceTracker::default();
         let mut open_item: Option<OpenItem> = None;
         let mut last_bullet: Option<usize> = None;
+        let mut follows_prose = false;
         for line_index in line_range {
             let doc_line = &doc_lines[line_index];
             let text = doc_line.text.as_str();
@@ -204,8 +209,10 @@ impl ContentBuilder<'_> {
                             text: bullet.content.trim().to_owned(),
                             position: doc_line.position,
                             content_indent: bullet.content_indent,
+                            follows_prose,
                             sub_bullets: Vec::new(),
                         });
+                        follows_prose = false;
                         last_bullet = Some(bullets.len() - 1);
                         open_item = Some(OpenItem::Bullet {
                             index: bullets.len() - 1,
@@ -225,6 +232,7 @@ impl ContentBuilder<'_> {
                     }
                     (_, None) => {
                         open_item = Some(self.push_prose(text));
+                        follows_prose = true;
                     }
                 }
                 continue;
@@ -249,6 +257,7 @@ impl ContentBuilder<'_> {
                     if !continues_bullet {
                         last_bullet = None;
                         open_item = Some(self.push_prose(text));
+                        follows_prose = true;
                     }
                 }
             }
@@ -399,7 +408,7 @@ mod tests {
              Fenced.\n```\n\n[`x`]: crate::x";
         let content = content_of(text, "Parameters");
         assert_eq!(content.prose, ["The inputs:", "Trailing prose."]);
-        let bullets: Vec<(&str, usize, usize)> = content
+        let bullets: Vec<(&str, usize, usize, bool)> = content
             .bullets
             .iter()
             .map(|bullet| {
@@ -407,14 +416,15 @@ mod tests {
                     bullet.text.as_str(),
                     bullet.position.line,
                     bullet.content_indent,
+                    bullet.follows_prose,
                 )
             })
             .collect();
         assert_eq!(
             bullets,
             [
-                ("`a` - The first input.", 5, 2),
-                ("`b` - The second.", 9, 2)
+                ("`a` - The first input.", 5, 2, true),
+                ("`b` - The second.", 9, 2, false)
             ]
         );
         let sub_bullets: Vec<(&str, usize)> = content.bullets[0]
@@ -438,12 +448,24 @@ mod tests {
                     deeper bullet.\n* `b` - The second.";
         let content = content_of(text, "Parameters");
         assert_eq!(content.prose, ["Prose.", "* A deeper bullet."]);
-        let bullets: Vec<(&str, usize)> = content
+        let bullets: Vec<(&str, usize, bool)> = content
             .bullets
             .iter()
-            .map(|bullet| (bullet.text.as_str(), bullet.sub_bullets.len()))
+            .map(|bullet| {
+                (
+                    bullet.text.as_str(),
+                    bullet.sub_bullets.len(),
+                    bullet.follows_prose,
+                )
+            })
             .collect();
-        assert_eq!(bullets, [("`a` - The first.", 0), ("`b` - The second.", 0)]);
+        assert_eq!(
+            bullets,
+            [
+                ("`a` - The first.", 0, false),
+                ("`b` - The second.", 0, true)
+            ]
+        );
     }
 
     #[test]

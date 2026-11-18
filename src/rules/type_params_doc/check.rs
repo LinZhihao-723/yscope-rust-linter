@@ -285,6 +285,30 @@ mod tests {
     }
 
     #[test]
+    fn a_prose_only_section_reports_only_the_missing_parameters() {
+        let source_text = concat!(
+            "/// A handle.\n",
+            "///\n",
+            "/// # Type Parameters\n",
+            "///\n",
+            "/// The parameters are forwarded to [`State`]. Short names are used to:\n",
+            "///\n",
+            "/// * Reduce verbosity.\n",
+            "/// * Avoid formatting issues.\n",
+            "struct Handle<R, T> {\n",
+            "    state: State<R, T>,\n",
+            "}\n",
+        );
+        assert_eq!(
+            checked(source_text, false),
+            [
+                "3:1: `# Type Parameters` doesn't document `R`; add \"* `R` - ...\"",
+                "3:1: `# Type Parameters` doesn't document `T`; add \"* `T` - ...\"",
+            ]
+        );
+    }
+
+    #[test]
     fn trait_impl_methods_are_not_checked() {
         let source_text = concat!(
             "impl<T> Tr<T> for S {\n",

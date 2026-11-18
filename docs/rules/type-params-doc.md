@@ -175,7 +175,9 @@ The section follows the y-scope Rust style guide, with one top-level bullet per 
   description. The description may continue on the next lines, and may have sub-bullets.
 * A bullet that starts with a code link, such as ``* [`Value`] - ...``, or uses another separator,
   such as ``* `Value`: ...``, still documents its parameter, but is reported.
-* The bullets may come in any order. Prose in the section is ignored.
+* The bullets may come in any order. Prose in the section is ignored, and so is a list that the
+  prose introduces: the bullets after a prose paragraph, through the next prose, belong to it when
+  none of them starts with a code span or a code link.
 
 ```rust
 /// Runs the jobs.
@@ -202,6 +204,30 @@ example.rs:7:1: type-params-doc: this `# Type Parameters` bullet doesn't start w
 example.rs:10:1: type-params-doc: the docstring has a second `# Type Parameters` section at the same level; merge them
 ```
 
+A list that prose introduces isn't checked as parameter bullets:
+
+```rust
+/// A handle to a job's state.
+///
+/// # Type Parameters
+///
+/// The parameters are forwarded to `JobState`. Short names are used to:
+///
+/// * Reduce verbosity.
+/// * Match the declaration of `JobState`.
+struct JobStateHandle<R, T> {
+    state: JobState<R, T>,
+}
+```
+
+```console
+$ yscope-rust-linter example.rs
+example.rs:3:1: type-params-doc: `# Type Parameters` doesn't document `R`; add "* `R` - ..."
+example.rs:3:1: type-params-doc: `# Type Parameters` doesn't document `T`; add "* `T` - ..."
+```
+
+The two bullets belong to the prose, so they aren't reported as bullets without a name.
+
 ## Diagnostics
 
 Every diagnostic has the code `type-params-doc`.
@@ -214,7 +240,7 @@ Every diagnostic has the code `type-params-doc`.
 | `` `# Type Parameters` documents `X`, which isn't a generic parameter of I; remove the bullet `` | The bullet names something that isn't one of the item's own generic parameters. | Remove the bullet, or fix the name. |
 | `` `T` is already documented on line N; remove this bullet `` | Two bullets name `T`. | Merge them. |
 | `` write this `# Type Parameters` bullet as "* `T` - description" `` | The bullet names `T`, but not with a bare code span followed by ` - ` and a description. | Rewrite the bullet. |
-| `` this `# Type Parameters` bullet doesn't start with the generic parameter it documents; write "* `name` - description" `` | The bullet starts with prose. | Start it with the parameter's name. |
+| `` this `# Type Parameters` bullet doesn't start with the generic parameter it documents; write "* `name` - description" `` | The bullet starts with prose, and isn't in a list that prose introduces. | Start it with the parameter's name. |
 | `` the docstring has a second `# Type Parameters` section at the same level; merge them `` | Two `Type Parameters` headers of the same level. | Merge the sections. |
 
 `I` is the item, such as ``fn `load` ``, ``method `get` ``, ``trait method `load` ``, ``struct

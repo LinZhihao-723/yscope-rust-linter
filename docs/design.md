@@ -1195,7 +1195,12 @@ top-level bullet becomes a `ParamBullet`, whose `BulletForm` is one of:
 * `Canonical { name }`: the bullet starts with a bare code span, then ` - `, then a non-blank
   description. The description may continue on the next lines.
 
-Sub-bullets belong to their bullet and are never parameters. Prose in the section is ignored.
+Sub-bullets belong to their bullet and are never parameters. Prose in the section is ignored, and so
+are the lists it introduces. `DocSection::content` marks a top-level bullet with `follows_prose`
+when a prose paragraph comes right before it, and `parse` splits the bullets into lists at those
+bullets. A list that follows prose and has only `Nameless` bullets is dropped, so a prose list such
+as "Short names are used to: * Reduce verbosity." isn't reported bullet by bullet. A `Nameless`
+bullet in any other list is still a parameter bullet that lacks its name.
 
 `ParamSection::compare(required, accepted)` compares the bullets with the item's parameters.
 `required` are the names that must be documented, `accepted` are further names a bullet may document
