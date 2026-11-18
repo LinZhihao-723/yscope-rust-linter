@@ -133,6 +133,11 @@ const TAGS: [&str; 8] = [
     "IMPORTANT",
 ];
 
+/// The operators that make a line a [`LineKind::Formula`] when they follow its first token.
+const FORMULA_OPERATORS: [&str; 12] = [
+    "=", "==", "!=", "<=", ">=", "+=", "-=", "*=", "/=", ":=", "->", "=>",
+];
+
 /// # Returns
 ///
 /// Whether `trimmed` starts with one of [`TAGS`] followed by `:`.
@@ -143,11 +148,6 @@ fn is_tagged(trimmed: &str) -> bool {
             .is_some_and(|rest| rest.starts_with(':'))
     })
 }
-
-/// The operators that make a line a [`LineKind::Formula`] when they follow its first token.
-const FORMULA_OPERATORS: [&str; 12] = [
-    "=", "==", "!=", "<=", ">=", "+=", "-=", "*=", "/=", ":=", "->", "=>",
-];
 
 /// # Returns
 ///

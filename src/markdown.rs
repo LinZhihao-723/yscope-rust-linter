@@ -18,34 +18,6 @@ pub struct Fence {
     length: usize,
 }
 
-/// Tracks whether the lines of one block are inside a fenced code block.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct FenceTracker {
-    open_fence: Option<Fence>,
-}
-
-/// The marker of a list item line, such as `* ` or `1. `.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct BulletMarker<'text> {
-    /// The indent of the marker.
-    pub indent: usize,
-
-    /// The column, counted from the start of the line, where the item's text starts.
-    pub content_indent: usize,
-
-    /// The item's text after the marker and its whitespace.
-    pub content: &'text str,
-}
-
-/// The first line of a link reference definition, such as ``[`Foo`]: crate::foo::Foo``.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct LinkDefinitionLine<'text> {
-    pub label: &'text str,
-
-    /// The trimmed target after the `:`. It is empty when the target is on the following lines.
-    pub target: &'text str,
-}
-
 impl Fence {
     /// Recognizes a fence line: three or more backticks or tildes after any indent. A backtick
     /// fence's info string can't hold a backtick, so ```` ```a``` ```` is inline code.
@@ -89,6 +61,12 @@ impl Fence {
     }
 }
 
+/// Tracks whether the lines of one block are inside a fenced code block.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct FenceTracker {
+    open_fence: Option<Fence>,
+}
+
 impl FenceTracker {
     /// Moves the tracker past `line`: a fence line outside a fenced block opens one, and a matching
     /// fence line inside one closes it.
@@ -106,6 +84,28 @@ impl FenceTracker {
         }
         true
     }
+}
+
+/// The marker of a list item line, such as `* ` or `1. `.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BulletMarker<'text> {
+    /// The indent of the marker.
+    pub indent: usize,
+
+    /// The column, counted from the start of the line, where the item's text starts.
+    pub content_indent: usize,
+
+    /// The item's text after the marker and its whitespace.
+    pub content: &'text str,
+}
+
+/// The first line of a link reference definition, such as ``[`Foo`]: crate::foo::Foo``.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LinkDefinitionLine<'text> {
+    pub label: &'text str,
+
+    /// The trimmed target after the `:`. It is empty when the target is on the following lines.
+    pub target: &'text str,
 }
 
 /// # Returns
