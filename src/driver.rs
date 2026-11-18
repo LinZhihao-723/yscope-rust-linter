@@ -1,6 +1,7 @@
 //! The lint run: discovering files, running each enabled rule on them, applying suppressions and
 //! line filters, and sorting the result.
 
+use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::Read;
@@ -20,6 +21,7 @@ use crate::rules::Rule;
 use crate::rules::RuleId;
 use crate::source;
 use crate::source::LineFilter;
+use crate::syntax::test_code::TestModuleCache;
 
 /// The outcome of a lint run.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -90,6 +92,10 @@ pub fn run(config: LintConfig) -> Result<Report, Error> {
 struct FileChecker {
     rule_set: RuleSet,
     rules: Vec<Rule>,
+
+    /// The out-of-line test module verdicts, shared by the rules through each file's
+    /// [`FileContext`].
+    test_module_cache: RefCell<TestModuleCache>,
 }
 
 impl FileChecker {
@@ -106,6 +112,7 @@ impl FileChecker {
                 .filter(|rule_id| config.rule_set.contains(*rule_id))
                 .map(|rule_id| Rule::new(rule_id, config))
                 .collect(),
+            test_module_cache: RefCell::default(),
         }
     }
 
@@ -130,7 +137,7 @@ impl FileChecker {
         source_text: &str,
         line_filter: &LineFilter,
     ) -> Vec<Diagnostic> {
-        let context = FileContext::new(path, source_text);
+        let context = FileContext::new(path, source_text, &self.test_module_cache);
         let rule_diagnostics = self
             .rules
             .iter_mut()

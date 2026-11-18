@@ -211,6 +211,36 @@ fn include_tests_flag_checks_test_fns() {
 }
 
 #[test]
+fn undecidable_test_module_is_one_parse_error_that_names_the_asking_rules() {
+    let directory =
+        test_directory("undecidable_test_module_is_one_parse_error_that_names_the_asking_rules");
+    write_file(&directory, "dir/mod.rs", "fn broken( {}\n");
+    write_file(&directory, "dir/child.rs", "fn f() {}\n");
+    let problem = "dir/child.rs:1:1: parse-error: can't tell whether this file is a \
+                   `#[cfg(test)]` module: syn failed to parse `dir/mod.rs` (cannot parse string \
+                   into token stream);";
+    assert_eq!(
+        stdout_lines(&run(&directory, &["dir/child.rs"], "")),
+        [format!(
+            "{problem} errors-doc, symbol-order, trait-params-doc, type-params-doc check it as \
+             non-test code"
+        )]
+    );
+    assert_eq!(
+        stdout_lines(&run(
+            &directory,
+            &["--rule", "errors-doc", "dir/child.rs"],
+            ""
+        )),
+        [format!("{problem} errors-doc checks it as non-test code")]
+    );
+    assert_eq!(
+        stdout_lines(&run(&directory, &["--include-tests", "dir/child.rs"], "")),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
 fn line_ranges_and_excludes_filter_files_and_lines() {
     let directory = test_directory("line_ranges_and_excludes_filter_files_and_lines");
     let source_text = format!("{INVALID_SUPPRESSION}\n\n{INVALID_SUPPRESSION}");
@@ -327,7 +357,8 @@ fn github_format_renders_workflow_commands() {
         stdout_lines(&output),
         [
             "::error file=a.rs,line=1,col=1,title=invalid-suppression::unknown rule `nope`; \
-             expected one of comment-greedy-wrap, errors-doc"
+             expected one of comment-greedy-wrap, errors-doc, symbol-order, trait-params-doc, \
+             type-params-doc"
         ]
     );
 }

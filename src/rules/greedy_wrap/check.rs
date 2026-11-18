@@ -81,6 +81,7 @@ fn underfilled_line_diagnostic(pair: JoinablePair<'_>, width: Width) -> Option<D
 
 #[cfg(test)]
 mod tests {
+    use std::cell::RefCell;
     use std::num::NonZeroUsize;
     use std::path::Path;
 
@@ -90,7 +91,12 @@ mod tests {
     fn diagnostics(source_text: &str, columns: usize) -> Vec<Diagnostic> {
         assert_eq!(lexer::lex(source_text).error, None, "{source_text:?}");
         let width = Width::new(NonZeroUsize::new(columns).expect("test widths are non-zero"));
-        Checker::new(width).check(&FileContext::new(Path::new("a.rs"), source_text))
+        let test_module_cache = RefCell::default();
+        Checker::new(width).check(&FileContext::new(
+            Path::new("a.rs"),
+            source_text,
+            &test_module_cache,
+        ))
     }
 
     #[test]

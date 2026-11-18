@@ -9,16 +9,28 @@ use crate::diagnostic::Diagnostic;
 use crate::file_context::FileContext;
 use crate::rules::errors_doc;
 use crate::rules::greedy_wrap;
+use crate::rules::symbol_order;
+use crate::rules::trait_params_doc;
+use crate::rules::type_params_doc;
 
 /// A lint rule that `--rule` can select and a suppression can name.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RuleId {
     CommentGreedyWrap,
     ErrorsDoc,
+    SymbolOrder,
+    TraitParamsDoc,
+    TypeParamsDoc,
 }
 
 impl RuleId {
-    pub const ALL: [Self; 2] = [Self::CommentGreedyWrap, Self::ErrorsDoc];
+    pub const ALL: [Self; 5] = [
+        Self::CommentGreedyWrap,
+        Self::ErrorsDoc,
+        Self::SymbolOrder,
+        Self::TraitParamsDoc,
+        Self::TypeParamsDoc,
+    ];
 
     /// # Returns
     ///
@@ -27,6 +39,9 @@ impl RuleId {
         match self {
             Self::CommentGreedyWrap => "comment-greedy-wrap",
             Self::ErrorsDoc => "errors-doc",
+            Self::SymbolOrder => "symbol-order",
+            Self::TraitParamsDoc => "trait-params-doc",
+            Self::TypeParamsDoc => "type-params-doc",
         }
     }
 }
@@ -63,6 +78,9 @@ impl FromStr for RuleId {
 pub enum Rule {
     CommentGreedyWrap(greedy_wrap::Checker),
     ErrorsDoc(errors_doc::Checker),
+    SymbolOrder(symbol_order::Checker),
+    TraitParamsDoc(trait_params_doc::Checker),
+    TypeParamsDoc(type_params_doc::Checker),
 }
 
 impl Rule {
@@ -71,12 +89,21 @@ impl Rule {
     /// # Returns
     ///
     /// The rule `rule_id`, with the settings of `config`.
-    pub fn new(rule_id: RuleId, config: &LintConfig) -> Self {
+    pub const fn new(rule_id: RuleId, config: &LintConfig) -> Self {
         match rule_id {
             RuleId::CommentGreedyWrap => {
                 Self::CommentGreedyWrap(greedy_wrap::Checker::new(config.width))
             }
             RuleId::ErrorsDoc => Self::ErrorsDoc(errors_doc::Checker::new(config.include_tests)),
+            RuleId::SymbolOrder => {
+                Self::SymbolOrder(symbol_order::Checker::new(config.include_tests))
+            }
+            RuleId::TraitParamsDoc => {
+                Self::TraitParamsDoc(trait_params_doc::Checker::new(config.include_tests))
+            }
+            RuleId::TypeParamsDoc => {
+                Self::TypeParamsDoc(type_params_doc::Checker::new(config.include_tests))
+            }
         }
     }
 
@@ -89,6 +116,9 @@ impl Rule {
         match self {
             Self::CommentGreedyWrap(checker) => checker.check(context),
             Self::ErrorsDoc(checker) => checker.check(context),
+            Self::SymbolOrder(checker) => checker.check(context),
+            Self::TraitParamsDoc(checker) => checker.check(context),
+            Self::TypeParamsDoc(checker) => checker.check(context),
         }
     }
 }

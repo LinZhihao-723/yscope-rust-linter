@@ -4,7 +4,6 @@
 use std::collections::HashSet;
 
 use crate::diagnostic::Diagnostic;
-use crate::diagnostic::DiagnosticCode;
 use crate::diagnostic::Position;
 use crate::diagnostic::counted;
 use crate::doc::doc_lines;
@@ -30,15 +29,11 @@ use crate::rules::errors_doc::symbol::Pairing;
 use crate::rules::errors_doc::symbol::QualifierLinks;
 use crate::syntax::symbol_path::SymbolPath;
 use crate::syntax::symbol_path::is_upper_camel_case;
-use crate::syntax::test_code::TestModuleCache;
 
 /// Checks the `# Errors` sections of the fns in each file of a run.
-///
-/// One checker is created per run, so it can keep state across the files it checks.
 #[derive(Debug)]
 pub struct Checker {
     include_tests: bool,
-    test_module_cache: TestModuleCache,
 }
 
 impl Checker {
@@ -48,11 +43,8 @@ impl Checker {
     ///
     /// A checker that also checks `#[test]` fns and `#[cfg(test)]` modules if `include_tests` is
     /// set.
-    pub fn new(include_tests: bool) -> Self {
-        Self {
-            include_tests,
-            test_module_cache: TestModuleCache::default(),
-        }
+    pub const fn new(include_tests: bool) -> Self {
+        Self { include_tests }
     }
 
     /// Checks every checkable fn of one file. A trait fn without a default body only gets the
@@ -62,38 +54,24 @@ impl Checker {
     /// The file is skipped in these cases:
     ///
     /// * The file failed to lex.
-    /// * `syn` fails to parse the file. A `parse-error` diagnostic says so.
+    /// * `syn` fails to parse the file. The [`FileContext`] reports a `parse-error` diagnostic.
     /// * The file is an out-of-line `#[cfg(test)]` module and tests aren't included. If a declaring
-    ///   file that would decide it can't be read or parsed, the file is checked, and a
-    ///   `parse-error` diagnostic at its first line says why.
+    ///   file that would decide it can't be read or parsed, the file is checked, and the
+    ///   [`FileContext`] reports a `parse-error` diagnostic at its first line that says why.
     ///
     /// # Returns
     ///
     /// An `errors-doc` diagnostic for every mismatch between a fn's `# Errors` section and its
     /// body. Each one's anchor span is the whole fn, and its fn header is the lines from the fn's
     /// first attribute or doc line through its `fn` keyword.
-    pub fn check(&mut self, context: &FileContext<'_>) -> Vec<Diagnostic> {
-        let syntax_tree = match context.syntax_tree(RuleId::ErrorsDoc) {
-            Ok(syntax_tree) => syntax_tree,
-            Err(parse_error) => return parse_error.into_iter().collect(),
+    pub fn check(&self, context: &FileContext<'_>) -> Vec<Diagnostic> {
+        let Some(syntax_tree) = context.syntax_tree(RuleId::ErrorsDoc) else {
+            return Vec::new();
         };
-        let mut diagnostics = Vec::new();
-        if !self.include_tests {
-            let verdict = self.test_module_cache.verdict(context.path());
-            if let Some(problem) = verdict.problem {
-                diagnostics.push(Diagnostic::new(
-                    DiagnosticCode::ParseError,
-                    Position { line: 1, column: 1 },
-                    format!(
-                        "can't tell whether this file is a `#[cfg(test)]` module: {problem}; \
-                         errors-doc checks it as non-test code"
-                    ),
-                ));
-            }
-            if verdict.is_test_module {
-                return diagnostics;
-            }
+        if !self.include_tests && context.is_test_module(RuleId::ErrorsDoc) {
+            return Vec::new();
         }
+        let mut diagnostics = Vec::new();
         let file_index = FileIndex::build(syntax_tree);
         let qualifier_links = file_index.qualifier_links();
         for fn_item in items::collect(syntax_tree, self.include_tests) {
@@ -887,6 +865,7 @@ fn format_message(kind: &FormatFindingKind, param_names: &[String]) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::RefCell;
     use std::path::Path;
 
     use super::*;
@@ -923,9 +902,11 @@ mod tests {
 
     fn all_findings(source_text: &str) -> Vec<String> {
         syn::parse_file(source_text).expect("valid file");
+        let test_module_cache = RefCell::default();
         let context = FileContext::new(
             Path::new("nonexistent-fixture-directory/subject.rs"),
             source_text,
+            &test_module_cache,
         );
         let mut diagnostics = Checker::new(false).check(&context);
         diagnostics.sort_by_key(Diagnostic::position);
@@ -1247,9 +1228,11 @@ mod tests {
     #[test]
     fn findings_are_anchored_to_the_whole_fn_and_its_header() {
         let source_text = subject(&[], "    load()?;\n    Ok(())");
+        let test_module_cache = RefCell::default();
         let context = FileContext::new(
             Path::new("nonexistent-fixture-directory/subject.rs"),
             &source_text,
+            &test_module_cache,
         );
         let diagnostics = Checker::new(false).check(&context);
         let spans: Vec<_> = diagnostics

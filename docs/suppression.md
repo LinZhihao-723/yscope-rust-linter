@@ -29,8 +29,8 @@ There are five forms:
 
 * A suppression is a plain `//` comment whose text starts with `yscope-rust-linter:`. A `///` or
   `//!` comment is never a suppression, so a suppression can't leak into rustdoc.
-* The rule IDs are `comment-greedy-wrap` and `errors-doc`. A suppression may name both, separated by
-  commas.
+* The rule IDs are `comment-greedy-wrap`, `errors-doc`, `symbol-order`, `trait-params-doc` and
+  `type-params-doc`. A suppression may name several, separated by commas.
 * Every form but `allow-end` needs a reason after `):`. The reason must not be blank. `allow-end`
   may have one too.
 * Spaces after `yscope-rust-linter:`, around each rule ID and before the `:` of the reason are
@@ -337,7 +337,7 @@ example.rs:3:1: invalid-suppression: suppression needs a reason after `):`; expe
 example.rs:4:1: invalid-suppression: suppression names no rule; expected `// yscope-rust-linter: allow(<rule-id>[, <rule-id>]...): <reason>`
 example.rs:5:1: invalid-suppression: malformed suppression; expected `// yscope-rust-linter: allow(<rule-id>[, <rule-id>]...): <reason>`
 example.rs:6:1: invalid-suppression: unknown suppression form `allow-block`; expected one of `allow`, `allow-item`, `allow-start`, `allow-end`, `allow-file`
-example.rs:7:1: invalid-suppression: unknown rule `errors_doc`; expected one of comment-greedy-wrap, errors-doc
+example.rs:7:1: invalid-suppression: unknown rule `errors_doc`; expected one of comment-greedy-wrap, errors-doc, symbol-order, trait-params-doc, type-params-doc
 example.rs:8:1: invalid-suppression: `parse-error` is not a rule and can't be suppressed
 example.rs:9:1: invalid-suppression: malformed suppression; expected `// yscope-rust-linter: allow-end(<rule-id>[, <rule-id>]...)`
 ```
@@ -400,7 +400,7 @@ fn f( {}
 ```console
 $ yscope-rust-linter example.rs
 example.rs:1:1: invalid-suppression: can't locate the item of this `allow-item` suppression: syn failed to parse the file (cannot parse string into token stream)
-example.rs:2:5: parse-error: syn failed to parse the file (cannot parse string into token stream); errors-doc is skipped
+example.rs:2:5: parse-error: syn failed to parse the file (cannot parse string into token stream); errors-doc, symbol-order, trait-params-doc, type-params-doc are skipped
 ```
 
 A `///` or `//!` comment that looks like a suppression is a doc line, not an invalid suppression. It

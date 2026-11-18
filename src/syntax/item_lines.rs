@@ -37,6 +37,22 @@ pub fn collect(syntax_tree: &syn::File) -> Vec<ItemLines> {
     item_collector.item_lines
 }
 
+/// Finds the lines of one item, such as a `syn::Item`, a `syn::ImplItemFn` or a `syn::TraitItemFn`.
+///
+/// # Returns
+///
+/// The lines of `item`, or [`None`] if it has no token after its outer attributes.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the stubs of the new rules use it once they are implemented"
+    )
+)]
+pub fn of(item: &impl ToTokens) -> Option<ItemLines> {
+    lines_of(item.to_token_stream())
+}
+
 /// The `syn` visitor that collects [`ItemLines`].
 struct ItemCollector {
     item_lines: Vec<ItemLines>,
@@ -156,6 +172,18 @@ mod tests {
                 "3", "3", "4", "5", "6", "7", "8", "9", "11", "11", "11", "11", "12", "12", "12",
                 "12", "12"
             ]
+        );
+    }
+
+    #[test]
+    fn lines_of_one_item_match_the_collected_lines() {
+        let source_text = "/// Doc.\n#[inline]\npub fn f() {\n}\n";
+        let syntax_tree = syn::parse_file(source_text).expect("valid file");
+        let item_lines = of(&syntax_tree.items[0]).expect("an item with tokens");
+        assert_eq!(collect(&syntax_tree), [item_lines]);
+        assert_eq!(
+            (item_lines.span.to_string(), item_lines.header.to_string()),
+            ("1-4".to_owned(), "1-3".to_owned())
         );
     }
 

@@ -1,14 +1,17 @@
 # yscope-rust-linter design
 
 This document is for maintainers. It describes how `yscope-rust-linter` is built: its pipeline, its
-modules, and the models behind its two rules. What the tool checks and how to use it are documented
-for users elsewhere:
+modules, and the models behind its rules. What the tool checks and how to use it are documented for
+users elsewhere:
 
 * [`README.md`](../README.md): installation, the command line, output and exit codes, and CI use.
 * [`docs/rules/comment-greedy-wrap.md`](rules/comment-greedy-wrap.md): the comment rule, with its
   exemptions.
 * [`docs/rules/errors-doc.md`](rules/errors-doc.md): the `# Errors` rule, with the accepted
   documentation format and its findings.
+* [`docs/rules/symbol-order.md`](rules/symbol-order.md): the item ordering rule.
+* [`docs/rules/type-params-doc.md`](rules/type-params-doc.md): the `# Type Parameters` rule.
+* [`docs/rules/trait-params-doc.md`](rules/trait-params-doc.md): the `# Parameters` rule.
 * [`docs/suppression.md`](suppression.md): the suppression comments.
 
 This document doesn't repeat those. It links to them where the user-facing behavior is the
@@ -43,6 +46,14 @@ specification.
   * [File index](#file-index)
   * [Body scan](#body-scan)
   * [Comparison](#comparison)
+* [Parameter sections](#parameter-sections)
+* [symbol-order](#symbol-order)
+  * [Checked scopes](#checked-scopes)
+  * [Sort keys](#sort-keys)
+  * [Minimal moves](#minimal-moves)
+  * [symbol-order diagnostics](#symbol-order-diagnostics)
+* [type-params-doc](#type-params-doc)
+* [trait-params-doc](#trait-params-doc)
 * [Suppression internals](#suppression-internals)
 * [Diagnostics and output](#diagnostics-and-output)
 * [Line ranges and the diff filter](#line-ranges-and-the-diff-filter)
@@ -53,8 +64,8 @@ specification.
 
 ## Scope
 
-The tool enforces two y-scope Rust style rules that neither rustfmt nor clippy can check. It was
-built against two code bases, [y-scope/clp](https://github.com/y-scope/clp) and
+The tool enforces y-scope Rust style rules that neither rustfmt nor clippy can check. It was built
+against two code bases, [y-scope/clp](https://github.com/y-scope/clp) and
 [y-scope/spider](https://github.com/y-scope/spider), and the motivating examples below come from
 them.
 
@@ -70,6 +81,9 @@ Non-goals:
 
 * Requiring a `# Errors` section. Only existing sections are checked; `clippy::missing_errors_doc`
   covers their presence.
+* Requiring docstrings. Every docstring rule skips an item without one: `missing_docs` and review
+  cover their presence. `type-params-doc` and `trait-params-doc` do require their section in a
+  docstring that exists.
 * Type resolution. The tool works on syntax only and never runs rustc or rust-analyzer.
 * Cross-file resolution, except the parent-file lookup for [out-of-line test
   modules](#out-of-line-test-modules).
@@ -103,7 +117,8 @@ Per-file core:
 * `src/driver.rs`: the run, and the per-file pipeline in `FileChecker`.
 * `src/file_context.rs`: [`FileContext`](#filecontext), the per-file input of the rules.
 * `src/lexer.rs`: the [comment lexer](#comment-lexer).
-* `src/markdown.rs`: the [line-level Markdown classifier](#markdown-classifier) both rules share.
+* `src/markdown.rs`: the [line-level Markdown classifier](#markdown-classifier) the comment and
+  docstring rules share.
 * `src/suppression.rs`: [suppression](#suppression-internals) parsing, coverage, and
   unused-suppression reporting.
 * `src/diagnostic.rs`: diagnostic codes, positions, anchor spans, sorting and rendering.
@@ -111,11 +126,15 @@ Per-file core:
 Rule-agnostic helpers:
 
 * `src/syntax/`: helpers over `syn` trees. `span.rs` converts span locations to positions,
-  `item_lines.rs` finds the lines of every item, `symbol_path.rs` normalizes paths, `types.rs` looks
-  through parenthesized types, and `test_code.rs` recognizes test attributes and out-of-line test
-  modules.
+  `item_lines.rs` finds the lines of every item or of one item, `symbol_path.rs` normalizes paths,
+  `types.rs` looks through parenthesized types, `test_code.rs` recognizes test attributes and
+  out-of-line test modules, `visibility.rs` classifies visibilities into the ordering groups,
+  `crate_names.rs` tells crate-local paths from foreign ones, and `doc_items.rs` walks the items
+  whose docstrings document their signatures.
 * `src/doc/`: helpers over docstrings. `doc_lines.rs` turns `#[doc]` attributes into positioned
-  lines, and `links.rs` finds code spans, links and link reference definitions.
+  lines, `links.rs` finds code spans, links and link reference definitions, `section.rs` selects a
+  `# Title` section and groups its lines, and `param_section.rs` parses and compares the sections
+  that document parameters one bullet each.
 
 Rules:
 
@@ -126,6 +145,8 @@ Rules:
   `symbol.rs` (matching), `file_index.rs` (per-file index), `body.rs` (body scan), `pass_through.rs`
   (helper pass-through), `macros.rs` (macro handling), `known_apis.rs` (library API tables) and
   `check.rs` (the `Checker` and the comparison).
+* `src/rules/symbol_order/`, `src/rules/type_params_doc/` and `src/rules/trait_params_doc/`: each a
+  `check.rs` with the rule's `Checker`, plus whatever modules the rule needs.
 
 Tests:
 
@@ -190,17 +211,29 @@ one diagnostic, including a meta diagnostic, and 0 when there is none.
 `FileContext` is what the rules see of one file. It is built once per file and shared by every
 enabled rule:
 
-* `path()`: the file's path.
 * `comment_lines()`: the lexed comment lines without the suppression candidates.
 * `syntax_tree(rule_id)`: the `syn::File`, parsed on the first call and kept in a `OnceCell`.
+* `is_test_module(rule_id)`: whether the file is an [out-of-line test
+  module](#out-of-line-test-modules), decided on the first call with the run's `TestModuleCache`.
 
-`syntax_tree` returns an error in two cases:
+`syntax_tree` returns `None` in two cases, and the rule then checks nothing:
 
-* `Err(None)` when the file failed to lex. A lex failure is an unterminated literal or block
-  comment, which `syn` can't parse either, and the lex failure is already a `parse-error`.
-* `Err(Some(diagnostic))` when `syn::parse_file` fails. The diagnostic is a `parse-error` that names
-  `rule_id` as skipped. Each rule that asks returns it and checks nothing, so only the rules that
-  need the tree are skipped.
+* The file failed to lex. A lex failure is an unterminated literal or block comment, which `syn`
+  can't parse either, and the lex failure is already a `parse-error`.
+* `syn::parse_file` fails. The context records `rule_id` as skipped, so only the rules that need the
+  tree are skipped.
+
+`is_test_module` records `rule_id` when a candidate declaring file can't be read or parsed, since
+the verdict may then be wrong.
+
+Both records become one meta diagnostic each in `finish`, whatever the number of rules that asked:
+
+* `syn failed to parse the file (...); errors-doc, symbol-order are skipped`, at the `syn` error.
+* `` can't tell whether this file is a `#[cfg(test)]` module: ...; errors-doc, symbol-order check it
+  as non-test code ``, at line 1.
+
+The rules are listed in `RuleId::ALL` order, with `is`/`checks` for one rule. A run with only
+`errors-doc` keeps the messages it had before the other rules existed.
 
 A file is parsed at most once, and not at all when no enabled rule needs the tree and no
 `allow-item` needs its items. So a `comment-greedy-wrap`-only run parses only the files that have an
@@ -222,8 +255,10 @@ Every rule is reached through `src/rules/registry.rs`:
   of a run. `Rule::new` builds it from the `LintConfig`, and `Rule::check` dispatches a
   `FileContext` to it.
 
-The `errors-doc` checker keeps state across files: the cache of [out-of-line test
-module](#out-of-line-test-modules) verdicts. The `comment-greedy-wrap` checker only holds the width.
+The checkers keep no state across files. The cache of [out-of-line test
+module](#out-of-line-test-modules) verdicts is shared by every rule, so `FileChecker` owns it in a
+`RefCell` and lends it to each file's `FileContext`. The `comment-greedy-wrap` checker holds the
+width, and the other checkers hold `include_tests`.
 
 ### Adding a rule
 
@@ -235,11 +270,14 @@ module](#out-of-line-test-modules) verdicts. The `comment-greedy-wrap` checker o
 4. Give each diagnostic an anchor span that covers every line whose change can create the finding,
    so that the [diff filter](#line-ranges-and-the-diff-filter) keeps it. Set a fn header if a
    suppression above the item should cover it.
-5. Document the rule in the README's rule table and in a page under `docs/rules/`.
+5. Document the rule in the README's rule table and in a page under `docs/rules/`, and add a section
+   to this document.
 
-A rule reads the file only through its `FileContext`. When `syntax_tree` returns an error, the rule
-returns the `parse-error` it holds, if any, and checks nothing. Rule-agnostic helpers belong in
-`src/syntax/` and `src/doc/`, next to `src/lexer.rs` and `src/markdown.rs`.
+A rule reads the file only through its `FileContext`. When `syntax_tree` returns `None`, the rule
+checks nothing; the context reports the `parse-error`. A rule that skips test code by default asks
+`is_test_module` unless `--include-tests` is set, and checks nothing for a test module.
+Rule-agnostic helpers belong in `src/syntax/` and `src/doc/`, next to `src/lexer.rs` and
+`src/markdown.rs`.
 
 ## Comment lexer
 
@@ -436,8 +474,8 @@ The model has three parts:
 
 `errors_doc::Checker::check` runs these stages on each file:
 
-1. It gets the syntax tree from the `FileContext`, or returns the `parse-error` it holds.
-2. Unless `--include-tests`, it asks the `TestModuleCache` whether the file is an [out-of-line test
+1. It gets the syntax tree from the `FileContext`, or checks nothing.
+2. Unless `--include-tests`, it asks the `FileContext` whether the file is an [out-of-line test
    module](#out-of-line-test-modules). A test module is skipped. A declaring file that can't be read
    or parsed gives a `parse-error` at line 1, and the file is checked unless another candidate marks
    it as a test module.
@@ -523,6 +561,11 @@ Non-literal values (`include_str!`) are skipped.
 
 `errors_section::parse` returns an `ErrorsSection`, or `None` when the docstring has no `# Errors`
 section.
+
+Section selection and line grouping are rule-agnostic, in `doc/section.rs`:
+`section::find(doc_lines, title)` returns a `DocSection` (header position, body line range,
+duplicate headers), and `DocSection::content` groups its body into a `SectionContent`. The rules
+below hold for any title; `errors-doc` uses `Errors`.
 
 Section selection:
 
@@ -1127,6 +1170,270 @@ messages are built in `check.rs` (`missing_finding`, `stale_variant_finding`,
 `stale_forward_finding`, `delegation_finding` and `format_message`), and name callees as the body
 writes them (`Self::load`, `Type::func` or a bare method name).
 
+## Parameter sections
+
+`type-params-doc` and `trait-params-doc` check sections of the same shape: one top-level bullet per
+parameter, ``* `name` - description``. `doc/param_section.rs` holds everything they share, so the
+two rules differ only in which items they check and which names those items have.
+
+`ParamSectionKind` names a kind of section by its title and the noun its messages use:
+`TYPE_PARAMETERS` (`Type Parameters`, "generic parameter") and `PARAMETERS` (`Parameters`,
+"parameter"). The title must match exactly, so `# Type parameters` and `# Arguments` are not
+sections of either kind.
+
+`ParamSectionKind::parse(doc_lines)` selects the section with
+[`section::find`](#parsing-the--errors-section) and groups it with `DocSection::content`, so
+selection, fences, link definitions and continuation lines behave exactly as for `# Errors`. Each
+top-level bullet becomes a `ParamBullet`:
+
+* `name`: the code of the reference that starts the bullet, either a code span (`` `T` ``) or a code
+  link (``[`T`]``). A bullet that starts with prose has no name.
+* `is_canonical`: the bullet starts with a bare code span, then ` - `, then a non-blank description.
+  The description may continue on the next lines.
+
+Sub-bullets belong to their bullet and are never parameters. Prose in the section is ignored.
+
+`ParamSection::compare(required, accepted)` compares the bullets with the item's parameters.
+`required` are the names that must be documented, `accepted` are further names a bullet may document
+without being required. It reports, in this order:
+
+1. `DuplicateHeader` for each later header with the same title at the same level.
+2. Per bullet, in source order: `NamelessBullet` without a name; `UnknownName` for a name in neither
+   list; `DuplicateBullet` for a name an earlier bullet has; else `NonCanonicalBullet` if the bullet
+   isn't canonical. A non-canonical bullet still documents its name.
+3. `Missing` at the header for each required name that no bullet has.
+
+`compare` is only meaningful for an item that has parameters. The rules handle the other two cases
+themselves, with the shared messages:
+
+* An item with parameters but no section: `missing_section_message`, at the docstring's first line.
+* A section on an item without parameters: `no_parameters_message`, at the header, instead of an
+  `UnknownName` per bullet.
+
+Messages, with `T` the title, `N` the noun and `I` the item as `DocItem::description` gives it (for
+example ``fn `load` ``):
+
+* `` I has Ns but no `# T` section; add one with a bullet for each of `'a`, `Item` ``
+* `` I has no Ns; remove the `# T` section ``
+* `` the docstring has a second `# T` section at the same level; merge them ``
+* `` this `# T` bullet doesn't start with the N it documents; write "* `name` - description" ``
+* `` write this `# T` bullet as "* `name` - description" ``
+* `` `# T` documents `x`, which isn't a N of I; remove the bullet ``
+* `` `x` is already documented on line 12; remove this bullet ``
+* `` `# T` doesn't document `x`; add "* `x` - ..." ``
+
+The order of the bullets isn't checked against the order of the parameters.
+
+`syntax/doc_items.rs` walks the items both rules look at. `doc_items::collect(syntax_tree,
+include_tests)` returns a `DocItem` (kind, name, attributes, own generics, signature for a fn, and
+`ItemLines`) for every fn, struct, enum, union, trait and type alias, including the ones nested in
+modules and fn bodies. Its `DocItemKind` tells free fns, inherent methods, trait impl methods and
+trait method declarations apart. Unless `include_tests`, it skips `#[cfg(test)]` items with
+everything in them and fns with a `test` attribute, as the `errors-doc` item walk does. Whether an
+item is documented is up to the rule: an item is documented when `doc_lines::collect` gives at least
+one non-blank line.
+
+## symbol-order
+
+The rule checks the "Symbol ordering" convention of the y-scope Rust `coding-style.md`: items are
+grouped by visibility, ordered by kind within a group, and each type is directly followed by its
+impl blocks.
+
+### Checked scopes
+
+The rule checks two kinds of scopes, each on its own:
+
+* Modules: the file root and the body of every inline `mod name { .. }`, nested ones included.
+  Items in fn bodies and other blocks are not in a module scope and aren't checked.
+* Inherent impl blocks (`impl Type { .. }` without a trait) in a checked module, whatever module
+  their type is defined in.
+
+Trait impl blocks and trait declarations aren't checked inside. Their item order follows the trait
+or rustfmt's `reorder_impl_items`.
+
+Unless `--include-tests`, an out-of-line test module file is skipped, as
+`FileContext::is_test_module` decides, and so is every item with `#[cfg(test)]` (or a `cfg(all(..))`
+that requires `test`), including whole `mod tests` blocks. With `--include-tests`, those items are
+counted like any other, and the body of a `#[cfg(test)] mod tests` is checked as a module.
+
+In a module, these items are exempt: they are neither checked nor counted, so they may sit anywhere,
+and the items around them are compared as if they weren't there.
+
+* `use` and `extern crate` items.
+* Modules, both `mod x;` declarations and inline modules. An inline module's body is still checked
+  as its own scope.
+* `macro_rules!` definitions and item-position macro invocations.
+* `extern` blocks and items `syn` keeps as verbatim tokens.
+* Impl blocks whose self type isn't a struct, enum or union defined in the same module (see below).
+
+In an inherent impl, associated types, macro invocations and verbatim items are exempt.
+
+### Sort keys
+
+Each counted item gets a sort key. The scope is in order when the keys don't decrease.
+
+In a module, the key is `(group, category, anchor, impl rank)`:
+
+* `group`: the item's `VisibilityGroup` (`syntax/visibility.rs`): `pub`, `pub(crate)`,
+  `pub(super)`, `pub(in path)`, private. `pub(in crate)` counts as `pub(crate)`, `pub(in super)` as
+  `pub(super)`, and `pub(self)` as private. An impl block has no visibility of its own and takes
+  its type's group.
+* `category`: const 0, static 1, type 2, fn 3. Structs, enums, unions, traits, trait aliases and
+  type aliases are all types, in any order among themselves, and an impl block has its type's
+  category.
+* `anchor`: for a type, its own index among the counted items; for an impl block, its type's index;
+  0 for consts, statics and fns. Types never conflict on it, since their indices increase in source
+  order, and it puts each impl block right after its own type.
+* `impl rank`: 0 for the type itself, 1 for an inherent impl, 2 for an impl of a crate-local trait,
+  3 for an impl of any other trait.
+
+An impl block belongs to a type when its self type, without parentheses, is a path of exactly one
+segment (generic arguments allowed) that names a struct, enum or union defined in the same module.
+`impl crate::a::Foo`, `impl<T> Trait for T`, `impl Trait for &Foo`, `impl dyn Trait` and impls on
+type aliases are exempt.
+
+A trait is crate-local when `CrateNames::is_crate_path` (`syntax/crate_names.rs`) holds for its
+path: the path starts with `crate`, `self` or `super`, or its first segment is a trait or module the
+file defines, or a name the file imports with a `use` rooted at `crate`, `self`, `super` or one of
+its own modules. A path with a leading `::`, a std or prelude trait (`Display`, `From`, `Clone`),
+and a trait of another crate of the same workspace (`spider_core::Task`) are external. A negative
+impl (`impl !Send for Foo`) is ranked by its trait like any other.
+
+In an inherent impl, the key is `(category, group)`: an associated const is `(0, pub)` whatever its
+visibility, and a fn is `(1, group)`. So consts come before fns, and fns are ordered `pub` first,
+private last. Consts aren't ordered among themselves.
+
+### Minimal moves
+
+Reporting every item whose key is smaller than the key of some earlier item would cascade: one
+private fn at the top of a module would flag every `pub` item after it. Instead, the rule keeps a
+longest non-decreasing subsequence of the keys in place, and flags only the items outside it. Moving
+exactly the flagged items, each to the place its diagnostic names, sorts the scope, and no smaller
+set of moves does.
+
+Among the longest subsequences, the rule keeps the one whose indices are lexicographically smallest,
+so for equally long choices the earlier items stay and the later ones move. With `pub a`, `fn b`,
+`pub c`, the kept items are `pub a` and `pub c`, and `fn b` is flagged. With `fn a`, `pub b`, either
+item could move, and `pub b` is flagged.
+
+The sequence is found by the quadratic dynamic program: the length `L[i]` of the longest
+non-decreasing subsequence that starts at each index, then a greedy walk that starts at the smallest
+`i` with the maximum `L[i]` and steps to the smallest later `j` with `key[j] >= key[i]` and `L[j] =
+L[i] - 1`. Scopes hold at most a few hundred items, so the quadratic cost is negligible.
+
+### symbol-order diagnostics
+
+One diagnostic per flagged item, at the item's first token after its outer attributes (its
+visibility, or its keyword):
+
+```text
+<item> should come <after|before> <reference>: <reason>
+```
+
+* `<item>` and `<reference>` describe an item by its group, its kind and its name, such as
+  ``pub(crate) fn `load` `` or ``private struct `State` ``, and the same way inside an inherent
+  impl, such as ``pub const `LIMIT` ``. An impl block is described without a group, as
+  ``impl `State` `` or ``impl `Display for State` ``. A trait's path segments are joined by `::`,
+  and its generic arguments are dropped.
+* `<reference>` is the last kept item whose key is at most the flagged item's key, with `after`. If
+  there is none, it is the first kept item, with `before`. So a misplaced impl block is told to come
+  after its type or its type's last kept impl.
+* `<reason>` compares the flagged item with the kept item it conflicts with: the first kept item
+  before it with a larger key, or else the last kept item after it with a smaller key. The first key
+  component that differs gives the reason:
+  * group: `pub items come before private items`, with the two groups' names.
+  * category: `consts come before fns`, with the plurals `consts`, `statics`, `types and their
+    impls` and `fns`.
+  * anchor, or impl rank against rank 0: `a type's impl blocks directly follow it`.
+  * impl rank: `inherent impls come before impls of crate traits`, `impls of crate traits come
+    before impls of external traits`, or `inherent impls come before impls of external traits`.
+  * In an inherent impl: `associated consts come before fns`, or `pub fns come before private fns`.
+
+Examples:
+
+```text
+src/a.rs:12:1: symbol-order: pub fn `run` should come after pub struct `Runner`: pub items come before private items
+src/a.rs:30:1: symbol-order: impl `Display for Runner` should come after impl `Runner`: a type's impl blocks directly follow it
+src/a.rs:41:5: symbol-order: pub fn `new` should come before private fn `helper`: pub fns come before private fns
+```
+
+The anchor span runs from the first line of the earlier of the flagged and the reference item to the
+last line of the later one, so a change anywhere between them, such as an inserted item that makes
+an old one misplaced, reports it. The fn header is the flagged item's `ItemLines::header`, so an
+`allow(symbol-order)` right above the item, or between its doc and its signature, covers it.
+
+## type-params-doc
+
+The rule checks the `# Type Parameters` section that the y-scope Rust `coding-style.md` requires
+whenever an item has generic parameters, as the review guide's "`# Type Parameters` is required
+when type parameters exist" repeats.
+
+Checked items, from `doc_items::collect`: documented free fns (nested ones too), inherent methods,
+trait method declarations (with or without a default body), structs, enums, unions, traits and type
+aliases. Not checked:
+
+* Trait impl methods: their docstring is optional, and the trait declaration documents the
+  parameters.
+* An item without a docstring. Like `errors-doc`, which skips a fn without an `# Errors` section,
+  the rule only checks docstrings that exist.
+* Test code, unless `--include-tests`, as `doc_items::collect` and `FileContext::is_test_module`
+  decide.
+
+An item's generic parameters are its own `Generics::params`, in declaration order:
+
+* A lifetime parameter is named with its tick, `'a`, as Spider writes it in
+  `components/spider-tdl/src/ffi.rs`.
+* A type parameter and a const generic are named by their identifier.
+
+Not parameters of the item: an impl block's own generics (a method documents only its own), a
+trait's generics on its methods, elided and anonymous lifetimes (`&self`, `'_`), `impl Trait`
+argument types, and `for<'a>` bound lifetimes.
+
+Checks, with the [shared messages](#parameter-sections) of `TYPE_PARAMETERS`:
+
+* A documented item with at least one generic parameter and no `# Type Parameters` section: the
+  missing-section message at the docstring's first line, listing every parameter.
+* A section on an item without generic parameters: the no-parameters message at the header.
+* Otherwise, `compare(params, [])`: missing, unknown, duplicate, nameless and non-canonical bullets,
+  and duplicate headers. A bullet must spell a lifetime with its tick, so `` `a` `` for `'a` is an
+  unknown name plus a missing parameter.
+
+Every diagnostic has the item's span as its anchor and the item's header as its fn header.
+
+## trait-params-doc
+
+The rule checks the two `# Parameters` conventions of the y-scope Rust `coding-style.md` and review
+guide ("`# Parameters` only in trait declarations"): a trait declaration documents its methods'
+parameters, and nothing else has a `# Parameters` section. The heading is `# Parameters`, as the
+guides and the existing uses in CLP and Spider write it; `# Arguments` isn't recognized.
+
+Checked items, from `doc_items::collect`, documented, and not test code unless `--include-tests`:
+
+* Trait method declarations, with or without a default body.
+* For the reverse check, every other item `doc_items::collect` returns: free fns, inherent methods,
+  trait impl methods, structs, enums, unions, traits and type aliases.
+
+A trait method's parameters are its typed inputs, without the receiver (`self`, `&self`, `&mut
+self`, `self: Box<Self>`):
+
+* An identifier pattern (`job_id: JobId`, `mut buffer: Vec<u8>`) is a required name. A name with a
+  leading underscore, such as `_context`, is required too.
+* `_` is skipped.
+* A destructuring pattern (`(a, b): (u8, u8)`, `Point { x, y }: Point`) is skipped. The identifiers
+  it binds are accepted names: a bullet may document them, but none is required.
+
+Checks, with the [shared messages](#parameter-sections) of `PARAMETERS`:
+
+* A documented trait method with at least one required name and no `# Parameters` section: the
+  missing-section message at the docstring's first line, listing the required names.
+* A section on a trait method with neither required nor accepted names: the no-parameters message
+  at the header.
+* Otherwise, `compare(required, accepted)`.
+* A `# Parameters` section on any other documented item: at the header, `` `# Parameters` belongs
+  only in trait method declarations; remove it from <item> ``. Its bullets aren't checked.
+
+Every diagnostic has the item's span as its anchor and the item's header as its fn header.
+
 ## Suppression internals
 
 The suppression forms and their user-facing semantics are in
@@ -1205,6 +1512,9 @@ The anchor span is used only by the line filter, and is never printed:
 * `errors-doc`: the whole fn, from its first attribute or doc line to its closing brace. A CI run
   then reports every `errors-doc` finding of any fn it touches, including a body change that makes
   the docstring stale.
+* `type-params-doc` and `trait-params-doc`: the whole item, as `item_lines::of` finds it.
+* `symbol-order`: the lines from the misplaced item through the item it should be placed next to,
+  so a change anywhere between them reports it.
 * Meta codes: their own line.
 
 The fn header is used only by `allow` suppressions, as [Suppression
@@ -1268,6 +1578,10 @@ fn or comment it belonged to, and the anchor spans cover the rest.
 * `driver.rs` tests the interactions of the pipeline: a lex failure, a `syn` failure in a run with
   and without `errors-doc`, the anchor spans against line filters, suppressions ending paragraphs,
   and the lazy parse for `allow-item`.
+* Every `symbol-order`, `type-params-doc` and `trait-params-doc` check and exemption has a fixture
+  that produces it or is clean, in the rule's own unit tests. `doc/section.rs`,
+  `doc/param_section.rs`, `syntax/visibility.rs`, `syntax/crate_names.rs` and `syntax/doc_items.rs`
+  have their own unit tests.
 * `tests/cli.rs` runs the built binary (`CARGO_BIN_EXE_yscope-rust-linter`) on files each test
   writes under `CARGO_TARGET_TMPDIR`. It covers the output format and order, exit codes, the
   directory walk, `@generated` skipping, `--rule`, `--exclude`, `--diff -`, `--format github` and
@@ -1349,6 +1663,27 @@ Matching:
 * A `Forwards` bullet whose call's error is handled (`if let Err(e) = foo() { log }`) isn't stale in
   a fn with an opaque site.
 
+What `symbol-order` checks:
+
+* Crate-local traits are recognized by syntax only. A trait imported through a glob (`use
+  super::*`), re-exported under another name in another file, or reached through a `use` that names
+  a crate-local module of another file is external.
+* `use` and inline modules are scoped file-wide, not per module, when `CrateNames` collects
+  crate-local names.
+* An impl block whose self type is a qualified path, a type alias or a generic parameter is exempt,
+  even if it is placed far from its type.
+* Lexicographically smallest kept items may flag an old item rather than the one a change inserted:
+  inserting a private fn between two `pub` fns flags the later `pub` fn. The anchor span still
+  covers the inserted lines.
+* Items generated by macros are invisible, and macro invocations are exempt.
+
+What `type-params-doc` and `trait-params-doc` check:
+
+* Sections are recognized by their exact title, so a misspelled title (`# Type parameters`, `#
+  Arguments`) is neither checked nor reported.
+* A docstring built only from `#[doc = include_str!(..)]` counts as undocumented.
+* Bullet order isn't checked.
+
 Input:
 
 * Quoted paths in `--diff` input (names with spaces or non-ASCII bytes) are an invalid argument.
@@ -1395,6 +1730,13 @@ Input:
   `FILE:RANGES` targets cover ad hoc use.
 
 ## Open questions
+
+* `_`-prefixed trait method parameters. `trait-params-doc` requires a bullet for `_context` as for
+  any named parameter. If CLP and Spider treat such parameters as undocumented by convention, they
+  could join `_` in being skipped.
+* Non-canonical parameter bullets. A few existing sections write ``* [`TypeMarker`]: ...``. The
+  param-doc rules report them; if that is too strict, `NonCanonicalBullet` could be dropped while
+  the name still counts.
 
 * Public facades that list leaf variants. `components/spider-client/src/client.rs` documents the
   leaf `ClientError` variants of each delegated call instead of forwarding the call. The convention

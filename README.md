@@ -1,10 +1,14 @@
 # yscope-rust-linter
 
-`yscope-rust-linter` checks two y-scope Rust style rules that neither rustfmt nor clippy can check:
+`yscope-rust-linter` checks the y-scope Rust style rules that neither rustfmt nor clippy can check:
 
 * Comment paragraphs are filled greedily, so no line leaves room for the next line's first word.
 * A fn's `# Errors` docstring section matches its body: it lists every error the fn returns directly
   and every function whose errors it forwards, and nothing else.
+* The items of a module and of an inherent impl block follow the symbol ordering convention.
+* A `# Type Parameters` section documents every generic parameter of an item.
+* A `# Parameters` section documents every parameter of a trait method declaration, and appears
+  nowhere else.
 
 It reads the source only, without building the crate, so it can lint a whole repository or only the
 lines a pull request changes.
@@ -15,6 +19,9 @@ lines a pull request changes.
 | ------- | -------------- |
 | [`comment-greedy-wrap`](docs/rules/comment-greedy-wrap.md) | Every `//`, `///` and `//!` comment paragraph is filled greedily to the width (100 columns by default). |
 | [`errors-doc`](docs/rules/errors-doc.md) | The `# Errors` section of a fn's docstring documents every error the fn returns directly and every function whose errors it forwards, and nothing it doesn't. |
+| [`symbol-order`](docs/rules/symbol-order.md) | The items of each module are grouped by visibility (`pub` first, private last), and within a group ordered consts, statics, types, then fns, with each type directly followed by its impl blocks. Inside an inherent impl, associated consts come before fns, and `pub` fns before private ones. |
+| [`trait-params-doc`](docs/rules/trait-params-doc.md) | A documented trait method declaration has a `# Parameters` section with one bullet per parameter, and no other item has a `# Parameters` section. |
+| [`type-params-doc`](docs/rules/type-params-doc.md) | A documented item with generic parameters has a `# Type Parameters` section with one bullet per type, lifetime and const parameter, and nothing else. |
 
 A rule can be silenced for a line, a comment block, an item, a region or a file with a suppression
 comment that gives a reason. See [Suppression comments](docs/suppression.md).
@@ -38,7 +45,7 @@ yscope-rust-linter [OPTIONS] [TARGET]...
 | `TARGET`             | A file, a directory, or `FILE:RANGES` (for example `src/a.rs:10-20,30,40-45`).           |
 | `--rule <ID>`        | Enable only this rule. Repeatable. By default, every rule runs.                          |
 | `--width <N>`        | The fill width for `comment-greedy-wrap`. Default: 100.                                  |
-| `--include-tests`    | Also check `#[test]` fns and `#[cfg(test)]` modules in `errors-doc`.                     |
+| `--include-tests`    | Also check `#[test]` fns and `#[cfg(test)]` items in the rules that skip them.           |
 | `--exclude <PATH>`   | Skip this file or directory, matched as a path prefix by whole components. Repeatable.   |
 | `--diff <FILE>`      | Lint only the lines changed by a unified diff. `-` reads the diff from stdin.            |
 | `--format <FORMAT>`  | `text` (default) or `github` (GitHub Actions `::error` workflow commands).               |

@@ -31,7 +31,7 @@ pub struct Cli {
     #[arg(long, value_name = "N", default_value = "100")]
     width: NonZeroUsize,
 
-    /// Also check #[test] fns and #[cfg(test)] modules in errors-doc.
+    /// Also check #[test] fns and #[cfg(test)] items, which the syntax-tree rules skip by default.
     #[arg(long)]
     include_tests: bool,
 

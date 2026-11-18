@@ -7,8 +7,9 @@ use crate::doc::links;
 use crate::doc::links::LinkDefinitions;
 use crate::doc::links::Reference;
 use crate::doc::links::ReferenceKind;
-use crate::markdown;
-use crate::markdown::FenceTracker;
+use crate::doc::section;
+use crate::doc::section::Bullet;
+use crate::doc::section::SectionContent;
 use crate::syntax::symbol_path::SymbolPath;
 use crate::syntax::symbol_path::is_upper_camel_case;
 
@@ -99,55 +100,31 @@ pub enum FormatFindingKind {
     DuplicateSection,
 }
 
-/// Finds and parses the fn's `# Errors` section.
-///
-/// The section is selected as follows:
-///
-/// * Headers are ATX headers outside fenced code blocks. An Errors header's title is `Errors`.
-/// * The section starts at the first Errors header of the smallest level.
-/// * If a header of a smaller level comes before it, the Errors header belongs to that other
-///   section, and the fn has no `# Errors` section.
-/// * The section ends at the next header of the same or a smaller level.
-/// * Another Errors header of the same level becomes a duplicate-section format finding.
+/// Finds and parses the fn's `# Errors` section, as [`section::find`] selects it. Another `#
+/// Errors` header of the same level becomes a duplicate-section format finding.
 ///
 /// # Returns
 ///
 /// The parsed section, or [`None`] if the docstring has no `# Errors` section.
 pub fn parse(doc_lines: &[DocLine]) -> Option<ErrorsSection> {
+    let doc_section = section::find(doc_lines, "Errors")?;
     let texts: Vec<&str> = doc_lines.iter().map(|line| line.text.as_str()).collect();
-    let headers = headers(&texts);
-    let errors_level = headers
-        .iter()
-        .filter(|header| header.is_errors)
-        .map(|header| header.level)
-        .min()?;
-    let selected = headers
-        .iter()
-        .position(|header| header.is_errors && header.level == errors_level)?;
-    if headers[..selected]
-        .iter()
-        .any(|header| header.level < errors_level)
-    {
-        return None;
-    }
-    let start_index = headers[selected].line_index;
-    let end_index = headers[selected + 1..]
-        .iter()
-        .find(|header| header.level <= errors_level)
-        .map_or(doc_lines.len(), |header| header.line_index);
-
     let definitions = LinkDefinitions::collect(&texts);
-    let mut section = SectionBuilder::new(&definitions, doc_lines[start_index].position);
-    for header in &headers[selected + 1..] {
-        if header.is_errors && header.level == errors_level {
-            section.format_findings.push(FormatFinding {
-                kind: FormatFindingKind::DuplicateSection,
-                position: doc_lines[header.line_index].position,
-            });
-        }
-    }
-    section.group(doc_lines, start_index + 1..end_index);
-    Some(section.finish())
+    let format_findings = doc_section
+        .duplicate_headers
+        .iter()
+        .map(|position| FormatFinding {
+            kind: FormatFindingKind::DuplicateSection,
+            position: *position,
+        })
+        .collect();
+    let content = doc_section.content(doc_lines, &definitions);
+    Some(finish(
+        doc_section.header,
+        &content,
+        &definitions,
+        format_findings,
+    ))
 }
 
 /// The wording that follows the possessive of a canonical forward bullet.
@@ -161,147 +138,145 @@ const MAPPED_FORWARD_WORDING: &str = " return values as ";
 /// The wording that follows the variant reference of a canonical mapped forward bullet.
 const MAPPED_FORWARD_SUFFIX: &str = " on failure";
 
-/// A top-level bullet of the section, with its continuation lines joined.
-struct BulletItem {
-    text: String,
-    position: Position,
-    content_indent: usize,
-    sub_bullets: Vec<SubBullet>,
+/// The reference of a forward bullet that is followed by a possessive `'s` or `'`.
+struct Possessive {
+    reference_index: usize,
+
+    /// Whether the possessive is `'s` followed by the canonical wording.
+    is_canonical: bool,
 }
 
-impl BulletItem {
-    /// Classifies one top-level bullet and adds it to `section`, in this order:
-    ///
-    /// 1. A bullet starting with `Forwards` or `Forward` whose references include one followed by
-    ///    `'s` or `'` is a [`ForwardKind::Named`] bullet. It names every reference up to that one.
-    ///    Text after `except` is ignored. Unless the possessive `'s` is followed by a wording that
-    ///    [`is_canonical_forward_wording`] accepts, the bullet gets a format finding.
-    /// 2. Such a bullet without a possessive reference that ends with `:` and has sub-bullets is a
-    ///    [`ForwardKind::List`] bullet. It names the first reference of each sub-bullet.
-    /// 3. Any other `Forwards` bullet is a [`ForwardKind::Unnamed`] bullet. It names every
-    ///    reference in it and gets a format finding.
-    /// 4. A bullet starting with a link reference, optionally after "Returns a " or "Returns an ",
-    ///    is a variant bullet. Its head is its text up to the first condition marker.
-    /// 5. Any other bullet adds its link references to the prose links.
-    fn classify_into(&self, definitions: &LinkDefinitions, section: &mut ErrorsSection) {
-        let text = self.text.as_str();
-        if let Some(forward_word) = forward_word(text) {
-            self.classify_forward_into(forward_word, definitions, section);
-            return;
-        }
+/// Classifies one top-level bullet and adds it to `section`, in this order:
+///
+/// 1. A bullet starting with `Forwards` or `Forward` whose references include one followed by `'s`
+///    or `'` is a [`ForwardKind::Named`] bullet. It names every reference up to that one. Text
+///    after `except` is ignored. Unless the possessive `'s` is followed by a wording that
+///    [`is_canonical_forward_wording`] accepts, the bullet gets a format finding.
+/// 2. Such a bullet without a possessive reference that ends with `:` and has sub-bullets is a
+///    [`ForwardKind::List`] bullet. It names the first reference of each sub-bullet.
+/// 3. Any other `Forwards` bullet is a [`ForwardKind::Unnamed`] bullet. It names every reference in
+///    it and gets a format finding.
+/// 4. A bullet starting with a link reference, optionally after "Returns a " or "Returns an ", is a
+///    variant bullet. Its head is its text up to the first condition marker.
+/// 5. Any other bullet adds its link references to the prose links.
+fn classify_into(bullet: &Bullet, definitions: &LinkDefinitions, section: &mut ErrorsSection) {
+    let text = bullet.text.as_str();
+    if let Some(forward_word) = forward_word(text) {
+        classify_forward_into(bullet, forward_word, definitions, section);
+        return;
+    }
 
-        let body = text
-            .strip_prefix("Returns an ")
-            .or_else(|| text.strip_prefix("Returns a "))
-            .unwrap_or(text);
-        let references = links::references(body, definitions);
-        let starts_with_link = references
-            .first()
-            .is_some_and(|reference| reference.kind == ReferenceKind::Link && reference.start == 0);
-        if starts_with_link {
-            let head_end = head_end(body);
-            let head_paths = link_paths(
+    let body = text
+        .strip_prefix("Returns an ")
+        .or_else(|| text.strip_prefix("Returns a "))
+        .unwrap_or(text);
+    let references = links::references(body, definitions);
+    let starts_with_link = references
+        .first()
+        .is_some_and(|reference| reference.kind == ReferenceKind::Link && reference.start == 0);
+    if starts_with_link {
+        let head_end = head_end(body);
+        let head_paths = link_paths(
+            &references
+                .iter()
+                .filter(|reference| reference.start < head_end)
+                .cloned()
+                .collect::<Vec<_>>(),
+        );
+        if !head_paths.is_empty() {
+            let linked_paths = link_paths(
                 &references
                     .iter()
-                    .filter(|reference| reference.start < head_end)
+                    .filter(|reference| reference.start >= head_end)
                     .cloned()
                     .collect::<Vec<_>>(),
-            );
-            if !head_paths.is_empty() {
-                let linked_paths = link_paths(
-                    &references
-                        .iter()
-                        .filter(|reference| reference.start >= head_end)
-                        .cloned()
-                        .collect::<Vec<_>>(),
-                )
-                .into_iter()
-                .chain(self.sub_bullets.iter().flat_map(|sub_bullet| {
-                    link_paths(&links::references(&sub_bullet.text, definitions))
-                }))
-                .collect();
-                section.variant_bullets.push(VariantBullet {
-                    head_paths,
-                    linked_paths,
-                    position: self.position,
-                });
-                return;
-            }
-        }
-        section.prose_links.extend(link_paths(&references));
-    }
-
-    /// Classifies a bullet that starts with `forward_word` (`Forwards` or `Forward`) and adds it to
-    /// `section`, as steps 1 to 3 of [`Self::classify_into`] describe. A named or listed function
-    /// whose last segment is in upper camel case is a type, which gets a format finding.
-    fn classify_forward_into(
-        &self,
-        forward_word: &str,
-        definitions: &LinkDefinitions,
-        section: &mut ErrorsSection,
-    ) {
-        let text = self.text.as_str();
-        let named_text = text.find(" except ").map_or(text, |index| &text[..index]);
-        let references = links::references(named_text, definitions);
-        let possessive = references
-            .iter()
-            .enumerate()
-            .find_map(|(index, reference)| {
-                let after = &named_text[reference.end..];
-                after.starts_with('\'').then(|| Possessive {
-                    reference_index: index,
-                    is_canonical: is_canonical_forward_wording(named_text, &references, index),
-                })
-            });
-        let (kind, paths) = if let Some(possessive) = possessive {
-            if forward_word == "Forward" || !possessive.is_canonical {
-                section.format_findings.push(FormatFinding {
-                    kind: FormatFindingKind::NonCanonicalForward,
-                    position: self.position,
-                });
-            }
-            (
-                ForwardKind::Named,
-                all_paths(&references[..=possessive.reference_index]),
             )
-        } else if text.trim_end().ends_with(':') && !self.sub_bullets.is_empty() {
-            let paths = self
-                .sub_bullets
-                .iter()
-                .filter_map(|sub_bullet| {
-                    links::references(&sub_bullet.text, definitions)
-                        .first()
-                        .and_then(|reference| SymbolPath::parse(&reference.path_text))
-                })
-                .collect();
-            (ForwardKind::List, paths)
-        } else {
-            let code_names = references
-                .iter()
-                .filter(|reference| reference.kind == ReferenceKind::BareCode)
-                .filter_map(|reference| SymbolPath::parse(&reference.path_text))
-                .filter(|path| path.len() == 1)
-                .map(|path| path.last().to_owned())
-                .collect();
-            section.format_findings.push(FormatFinding {
-                kind: FormatFindingKind::UnnamedForward { code_names },
-                position: self.position,
+            .into_iter()
+            .chain(bullet.sub_bullets.iter().flat_map(|sub_bullet| {
+                link_paths(&links::references(&sub_bullet.text, definitions))
+            }))
+            .collect();
+            section.variant_bullets.push(VariantBullet {
+                head_paths,
+                linked_paths,
+                position: bullet.position,
             });
-            (ForwardKind::Unnamed, all_paths(&references))
-        };
-        let named_paths = paths.iter().filter(|_| kind != ForwardKind::Unnamed);
-        for path in named_paths.filter(|path| is_upper_camel_case(path.last())) {
+            return;
+        }
+    }
+    section.prose_links.extend(link_paths(&references));
+}
+
+/// Classifies a bullet that starts with `forward_word` (`Forwards` or `Forward`) and adds it to
+/// `section`, as steps 1 to 3 of [`classify_into`] describe. A named or listed function whose last
+/// segment is in upper camel case is a type, which gets a format finding.
+fn classify_forward_into(
+    bullet: &Bullet,
+    forward_word: &str,
+    definitions: &LinkDefinitions,
+    section: &mut ErrorsSection,
+) {
+    let text = bullet.text.as_str();
+    let named_text = text.find(" except ").map_or(text, |index| &text[..index]);
+    let references = links::references(named_text, definitions);
+    let possessive = references
+        .iter()
+        .enumerate()
+        .find_map(|(index, reference)| {
+            let after = &named_text[reference.end..];
+            after.starts_with('\'').then(|| Possessive {
+                reference_index: index,
+                is_canonical: is_canonical_forward_wording(named_text, &references, index),
+            })
+        });
+    let (kind, paths) = if let Some(possessive) = possessive {
+        if forward_word == "Forward" || !possessive.is_canonical {
             section.format_findings.push(FormatFinding {
-                kind: FormatFindingKind::ForwardNamesType { path: path.clone() },
-                position: self.position,
+                kind: FormatFindingKind::NonCanonicalForward,
+                position: bullet.position,
             });
         }
-        section.forward_bullets.push(ForwardBullet {
-            kind,
-            paths,
-            position: self.position,
+        (
+            ForwardKind::Named,
+            all_paths(&references[..=possessive.reference_index]),
+        )
+    } else if text.trim_end().ends_with(':') && !bullet.sub_bullets.is_empty() {
+        let paths = bullet
+            .sub_bullets
+            .iter()
+            .filter_map(|sub_bullet| {
+                links::references(&sub_bullet.text, definitions)
+                    .first()
+                    .and_then(|reference| SymbolPath::parse(&reference.path_text))
+            })
+            .collect();
+        (ForwardKind::List, paths)
+    } else {
+        let code_names = references
+            .iter()
+            .filter(|reference| reference.kind == ReferenceKind::BareCode)
+            .filter_map(|reference| SymbolPath::parse(&reference.path_text))
+            .filter(|path| path.len() == 1)
+            .map(|path| path.last().to_owned())
+            .collect();
+        section.format_findings.push(FormatFinding {
+            kind: FormatFindingKind::UnnamedForward { code_names },
+            position: bullet.position,
+        });
+        (ForwardKind::Unnamed, all_paths(&references))
+    };
+    let named_paths = paths.iter().filter(|_| kind != ForwardKind::Unnamed);
+    for path in named_paths.filter(|path| is_upper_camel_case(path.last())) {
+        section.format_findings.push(FormatFinding {
+            kind: FormatFindingKind::ForwardNamesType { path: path.clone() },
+            position: bullet.position,
         });
     }
+    section.forward_bullets.push(ForwardBullet {
+        kind,
+        paths,
+        position: bullet.position,
+    });
 }
 
 /// Decides whether the possessive after the reference at `reference_index` of `text` is followed by
@@ -333,239 +308,51 @@ fn is_canonical_forward_wording(
         })
 }
 
-/// A sub-bullet, with its continuation lines joined.
-struct SubBullet {
-    text: String,
-    content_indent: usize,
-}
-
-/// The reference of a forward bullet that is followed by a possessive `'s` or `'`.
-struct Possessive {
-    reference_index: usize,
-
-    /// Whether the possessive is `'s` followed by the canonical wording.
-    is_canonical: bool,
-}
-
-/// The item that the next continuation line may extend.
-#[derive(Clone, Copy)]
-enum OpenItem {
-    Prose { index: usize },
-    Bullet { index: usize },
-    SubBullet { index: usize, sub_index: usize },
-}
-
-/// A header of the docstring.
-struct Header {
-    line_index: usize,
-    level: usize,
-    is_errors: bool,
-}
-
-/// Accumulates the parts of a section while its lines are grouped and its bullets classified.
-struct SectionBuilder<'definitions> {
-    definitions: &'definitions LinkDefinitions,
-    header: Position,
-    prose: Vec<String>,
-    bullets: Vec<BulletItem>,
-    format_findings: Vec<FormatFinding>,
-
-    /// The position of the section's first line outside fences and definitions, and whether that
-    /// line starts the first prose paragraph.
-    first_content: Option<(Position, bool)>,
-}
-
-impl<'definitions> SectionBuilder<'definitions> {
-    const fn new(definitions: &'definitions LinkDefinitions, header: Position) -> Self {
-        Self {
-            definitions,
-            header,
-            prose: Vec::new(),
-            bullets: Vec::new(),
-            format_findings: Vec::new(),
-            first_content: None,
-        }
-    }
-
-    /// Groups the section's lines into prose paragraphs, top-level bullets and sub-bullets.
-    ///
-    /// * Fenced code blocks and link reference definitions are skipped.
-    /// * Bullets at the section's smallest bullet indent are top-level bullets. Deeper bullets
-    ///   belong to the preceding top-level bullet.
-    /// * A non-blank, non-bullet line indented at least to an open bullet's content indent
-    ///   continues that bullet, and is joined to it with one space.
-    /// * Other non-bullet lines are prose.
-    fn group(&mut self, doc_lines: &[DocLine], line_range: std::ops::Range<usize>) {
-        let top_indent = self.top_bullet_indent(doc_lines, line_range.clone());
-        let mut fence_tracker = FenceTracker::default();
-        let mut open_item: Option<OpenItem> = None;
-        let mut last_bullet: Option<usize> = None;
-        for line_index in line_range {
-            let doc_line = &doc_lines[line_index];
-            let text = doc_line.text.as_str();
-            if fence_tracker.is_code(text)
-                || self.definitions.contains_line(line_index)
-                || text.trim().is_empty()
-            {
-                open_item = None;
-                continue;
-            }
-            if self.first_content.is_none() {
-                let is_prose = markdown::bullet_marker(text).is_none();
-                self.first_content = Some((doc_line.position, is_prose));
-            }
-            if let Some(bullet) = markdown::bullet_marker(text) {
-                match (top_indent, last_bullet) {
-                    (Some(top_indent), _) if bullet.indent <= top_indent => {
-                        self.bullets.push(BulletItem {
-                            text: bullet.content.trim().to_owned(),
-                            position: doc_line.position,
-                            content_indent: bullet.content_indent,
-                            sub_bullets: Vec::new(),
-                        });
-                        last_bullet = Some(self.bullets.len() - 1);
-                        open_item = Some(OpenItem::Bullet {
-                            index: self.bullets.len() - 1,
-                        });
-                    }
-                    (_, Some(index)) => {
-                        let sub_bullets = &mut self.bullets[index].sub_bullets;
-                        sub_bullets.push(SubBullet {
-                            text: bullet.content.trim().to_owned(),
-                            content_indent: bullet.content_indent,
-                        });
-                        open_item = Some(OpenItem::SubBullet {
-                            index,
-                            sub_index: sub_bullets.len() - 1,
-                        });
-                    }
-                    (_, None) => {
-                        open_item = Some(self.push_prose(text));
-                    }
-                }
-                continue;
-            }
-            let indent = markdown::indent(text);
-            match open_item {
-                Some(OpenItem::Bullet { index })
-                    if indent >= self.bullets[index].content_indent =>
-                {
-                    append_line(&mut self.bullets[index].text, text);
-                }
-                Some(OpenItem::SubBullet { index, sub_index })
-                    if indent >= self.bullets[index].sub_bullets[sub_index].content_indent =>
-                {
-                    append_line(&mut self.bullets[index].sub_bullets[sub_index].text, text);
-                }
-                Some(OpenItem::Prose { index }) => append_line(&mut self.prose[index], text),
-                _ => {
-                    let continues_bullet = last_bullet
-                        .is_some_and(|index| indent >= self.bullets[index].content_indent);
-                    if !continues_bullet {
-                        last_bullet = None;
-                        open_item = Some(self.push_prose(text));
-                    }
-                }
-            }
-        }
-    }
-
-    /// # Returns
-    ///
-    /// The smallest indent of a bullet in the section, outside fences and definitions.
-    fn top_bullet_indent(
-        &self,
-        doc_lines: &[DocLine],
-        line_range: std::ops::Range<usize>,
-    ) -> Option<usize> {
-        let mut fence_tracker = FenceTracker::default();
-        let mut top_indent = None;
-        for line_index in line_range {
-            let text = doc_lines[line_index].text.as_str();
-            if fence_tracker.is_code(text) || self.definitions.contains_line(line_index) {
-                continue;
-            }
-            if let Some(bullet) = markdown::bullet_marker(text) {
-                top_indent = Some(
-                    top_indent.map_or(bullet.indent, |indent: usize| indent.min(bullet.indent)),
-                );
-            }
-        }
-        top_indent
-    }
-
-    /// Starts a prose paragraph with `text`.
-    ///
-    /// # Returns
-    ///
-    /// The new paragraph as the open item.
-    fn push_prose(&mut self, text: &str) -> OpenItem {
-        self.prose.push(text.trim().to_owned());
-        OpenItem::Prose {
-            index: self.prose.len() - 1,
-        }
-    }
-
-    /// Classifies every top-level bullet and collects the prose links. A section whose first
-    /// paragraph isn't [`CANONICAL_INTRO`], or that has no bullet, gets a format finding at its
-    /// first line.
-    ///
-    /// # Returns
-    ///
-    /// The finished section.
-    fn finish(mut self) -> ErrorsSection {
-        let has_canonical_intro = matches!(self.first_content, Some((_, true)))
-            && self
-                .prose
-                .first()
-                .is_some_and(|intro| intro == CANONICAL_INTRO);
-        if !has_canonical_intro || self.bullets.is_empty() {
-            self.format_findings.push(FormatFinding {
-                kind: FormatFindingKind::NonCanonicalIntro,
-                position: self
-                    .first_content
-                    .map_or(self.header, |(position, _)| position),
-            });
-        }
-        let mut section = ErrorsSection {
-            header: self.header,
-            variant_bullets: Vec::new(),
-            forward_bullets: Vec::new(),
-            prose_links: Vec::new(),
-            has_bullets: !self.bullets.is_empty(),
-            format_findings: self.format_findings,
-        };
-        for paragraph in &self.prose {
-            section
-                .prose_links
-                .extend(link_paths(&links::references(paragraph, self.definitions)));
-        }
-        for bullet in &self.bullets {
-            bullet.classify_into(self.definitions, &mut section);
-        }
-        section
-    }
-}
-
+/// Classifies every top-level bullet of `content` and collects the prose links. A section whose
+/// first paragraph isn't [`CANONICAL_INTRO`], or that has no bullet, gets a format finding at its
+/// first line, or at `header` if it has no content.
+///
 /// # Returns
 ///
-/// The ATX headers of `texts` outside fenced code blocks.
-fn headers(texts: &[&str]) -> Vec<Header> {
-    let mut headers = Vec::new();
-    let mut fence_tracker = FenceTracker::default();
-    for (line_index, text) in texts.iter().enumerate() {
-        if fence_tracker.is_code(text) {
-            continue;
-        }
-        if let Some(header) = markdown::atx_header(text) {
-            headers.push(Header {
-                line_index,
-                level: header.level,
-                is_errors: header.title == "Errors",
-            });
-        }
+/// The finished section, with `format_findings` before the findings of its intro and its bullets.
+fn finish(
+    header: Position,
+    content: &SectionContent,
+    definitions: &LinkDefinitions,
+    mut format_findings: Vec<FormatFinding>,
+) -> ErrorsSection {
+    let has_canonical_intro = content
+        .first_content
+        .is_some_and(|first_content| first_content.is_prose)
+        && content
+            .prose
+            .first()
+            .is_some_and(|intro| intro == CANONICAL_INTRO);
+    if !has_canonical_intro || content.bullets.is_empty() {
+        format_findings.push(FormatFinding {
+            kind: FormatFindingKind::NonCanonicalIntro,
+            position: content
+                .first_content
+                .map_or(header, |first_content| first_content.position),
+        });
     }
-    headers
+    let mut section = ErrorsSection {
+        header,
+        variant_bullets: Vec::new(),
+        forward_bullets: Vec::new(),
+        prose_links: Vec::new(),
+        has_bullets: !content.bullets.is_empty(),
+        format_findings,
+    };
+    for paragraph in &content.prose {
+        section
+            .prose_links
+            .extend(link_paths(&links::references(paragraph, definitions)));
+    }
+    for bullet in &content.bullets {
+        classify_into(bullet, definitions, &mut section);
+    }
+    section
 }
 
 /// # Returns
@@ -612,12 +399,6 @@ fn all_paths(references: &[Reference]) -> Vec<SymbolPath> {
         .iter()
         .filter_map(|reference| SymbolPath::parse(&reference.path_text))
         .collect()
-}
-
-/// Appends a continuation line to a bullet or paragraph, joined with one space.
-fn append_line(text: &mut String, line: &str) {
-    text.push(' ');
-    text.push_str(line.trim());
 }
 
 #[cfg(test)]

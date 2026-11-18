@@ -145,10 +145,11 @@ example.rs:7:1: errors-doc: "Forwards [`load`]" names a function whose errors `c
 The rule needs the file's syntax tree. A file that `syn` can't parse gets a `parse-error`
 diagnostic, and the rule skips the file. If a parent file that would decide whether a file is a test
 module can't be read or parsed, the file is checked as non-test code, and a `parse-error` at its
-first line says why:
+first line says why. Each of these diagnostics is reported once per file, and names every enabled
+rule it affects:
 
 ```text
-src/store/tests.rs:1:1: parse-error: can't tell whether this file is a `#[cfg(test)]` module: syn failed to parse `src/store/mod.rs` (cannot parse string into token stream); errors-doc checks it as non-test code
+src/store/tests.rs:1:1: parse-error: can't tell whether this file is a `#[cfg(test)]` module: syn failed to parse `src/store/mod.rs` (cannot parse string into token stream); errors-doc, symbol-order, trait-params-doc, type-params-doc check it as non-test code
 ```
 
 ## The section format
@@ -1165,7 +1166,9 @@ example.rs:15:16: errors-doc: `load` returns [`Error::Empty`] directly, but `# E
 ### Other diagnostics
 
 * `parse-error: syn failed to parse the file (...); errors-doc is skipped`: the rule can't check a
-  file that `syn` can't parse. `comment-greedy-wrap` still checks it.
+  file that `syn` can't parse. `comment-greedy-wrap` still checks it. When other rules that need
+  the syntax tree are enabled too, the one diagnostic names them all, such as `errors-doc,
+  symbol-order are skipped`.
 * `` parse-error: can't tell whether this file is a `#[cfg(test)]` module: ... ``: the parent file
   can't be read or parsed. See [Which fns are checked](#which-fns-are-checked).
 
