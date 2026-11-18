@@ -14,6 +14,10 @@ use crate::syntax::types::peel_type_parens;
 use crate::syntax::types::type_last_segment;
 
 /// A fn that returns a `Result` and isn't test code.
+///
+/// # Type Parameters
+///
+/// * `'ast` - The lifetime of the syntax tree the fn is in.
 pub struct FnItem<'ast> {
     pub name: String,
     pub attrs: &'ast [syn::Attribute],
@@ -78,6 +82,10 @@ struct ItemContext {
 }
 
 /// The `syn` visitor that collects [`FnItem`]s.
+///
+/// # Type Parameters
+///
+/// * `'ast` - The lifetime of the syntax tree being walked.
 struct ItemWalker<'ast> {
     include_tests: bool,
     context_stack: Vec<ItemContext>,

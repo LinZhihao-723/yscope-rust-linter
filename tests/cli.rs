@@ -454,3 +454,77 @@ fn version_flag_prints_the_package_version() {
         [format!("yscope-rust-linter {}", env!("CARGO_PKG_VERSION"))]
     );
 }
+
+#[test]
+fn param_doc_rules_honor_rule_selection_and_suppressions() {
+    let directory = test_directory("param_doc_rules_honor_rule_selection_and_suppressions");
+    write_file(
+        &directory,
+        "a.rs",
+        concat!(
+            "/// A cache.\n",
+            "struct Cache<Value>(Value);\n",
+            "\n",
+            "trait Store {\n",
+            "    /// Loads.\n",
+            "    fn load(&self, key: &str);\n",
+            "\n",
+            "    // yscope-rust-linter: allow(trait-params-doc): reason\n",
+            "    /// Saves.\n",
+            "    fn save(&self, key: &str);\n",
+            "}\n",
+            "\n",
+            "// yscope-rust-linter: allow-item(type-params-doc): reason\n",
+            "/// A map.\n",
+            "type Map<Key> = Vec<Key>;\n",
+        ),
+    );
+    let type_params_finding = "a.rs:1:1: type-params-doc: struct `Cache` has generic parameters \
+                               but no `# Type Parameters` section; add one with a bullet for each \
+                               of `Value`";
+    let trait_params_finding = "a.rs:5:5: trait-params-doc: trait method `load` has parameters \
+                                but no `# Parameters` section; add one with a bullet for each of \
+                                `key`";
+    assert_eq!(
+        stdout_lines(&run(&directory, &["a.rs"], "")),
+        [type_params_finding, trait_params_finding]
+    );
+    assert_eq!(
+        stdout_lines(&run(&directory, &["--rule", "type-params-doc", "a.rs"], "")),
+        [type_params_finding]
+    );
+    assert_eq!(
+        stdout_lines(&run(
+            &directory,
+            &["--rule", "trait-params-doc", "a.rs"],
+            ""
+        )),
+        [trait_params_finding]
+    );
+}
+
+#[test]
+fn diff_that_adds_a_generic_parameter_reports_the_missing_bullet() {
+    let directory = test_directory("diff_that_adds_a_generic_parameter_reports_the_missing_bullet");
+    write_file(
+        &directory,
+        "src/lib.rs",
+        "/// Loads.\n///\n/// # Type Parameters\n///\n/// * `Value` - The value.\npub fn \
+         load<Value, Codec>() {}\n\n/// Saves.\npub fn save<Value>() {}\n",
+    );
+    let diff_text = "\
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -6 +6 @@
+-pub fn load<Value>() {}
++pub fn load<Value, Codec>() {}
+";
+    let output = run(&directory, &["--diff", "-"], diff_text);
+    assert_eq!(
+        stdout_lines(&output),
+        [
+            "src/lib.rs:3:1: type-params-doc: `# Type Parameters` doesn't document `Codec`; add \
+             \"* `Codec` - ...\""
+        ]
+    );
+}

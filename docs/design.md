@@ -1430,7 +1430,8 @@ self`, `self: Box<Self>`):
   leading underscore, such as `_context`, is required too.
 * `_` is skipped.
 * A destructuring pattern (`(a, b): (u8, u8)`, `Point { x, y }: Point`) is skipped. The identifiers
-  it binds are accepted names: a bullet may document them, but none is required.
+  it binds are accepted names: a bullet may document them, but none is required. A binding with a
+  subpattern (`point @ Point { .. }`) counts as a destructuring pattern, so `point` is accepted.
 
 Checks, with the [shared messages](#parameter-sections) of `PARAMETERS`:
 

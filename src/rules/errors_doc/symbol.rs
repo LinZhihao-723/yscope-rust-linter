@@ -201,6 +201,11 @@ impl QualifierLinks {
 }
 
 /// A body fact or a documented path to pair, with the key that the pairing reports it by.
+///
+/// # Type Parameters
+///
+/// * `'path` - The lifetime of the path.
+/// * `KeyType` - The type of the key.
 #[derive(Debug, Clone, Copy)]
 pub struct KeyedPath<'path, KeyType> {
     pub key: KeyType,
@@ -208,6 +213,11 @@ pub struct KeyedPath<'path, KeyType> {
 }
 
 /// The result of pairing body facts with documented paths.
+///
+/// # Type Parameters
+///
+/// * `FactKeyType` - The type of the body facts' keys.
+/// * `DocKeyType` - The type of the documented paths' keys.
 #[derive(Debug, Clone)]
 pub struct Pairing<FactKeyType, DocKeyType> {
     /// The keys of the facts paired with a documented path.

@@ -152,6 +152,10 @@ impl Destructuring {
 }
 
 /// Collects the leaves of [`outcome_leaves`].
+///
+/// # Type Parameters
+///
+/// * `'ast` - The lifetime of the syntax tree the leaves are in.
 struct LeafCollector<'ast> {
     leaves: Vec<&'ast syn::Expr>,
 }
