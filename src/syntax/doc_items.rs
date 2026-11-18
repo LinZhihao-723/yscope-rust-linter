@@ -12,19 +12,12 @@ use crate::syntax::test_code;
 /// # Type Parameters
 ///
 /// * `'ast` - The lifetime of the syntax tree the item is in.
-#[derive(Clone)]
 pub struct DocItem<'ast> {
-    pub kind: DocItemKind,
-    pub name: String,
+    pub kind: DocItemKind<'ast>,
+    name: String,
 
     /// The item's outer attributes, including its doc comments.
     pub attrs: &'ast [syn::Attribute],
-
-    /// The item's own generic parameters. An impl method's generics don't include the impl's.
-    pub generics: &'ast syn::Generics,
-
-    /// The signature of a fn, or [`None`] for other items.
-    pub sig: Option<&'ast syn::Signature>,
 
     /// The item's span and header, as [`item_lines::of`] finds them.
     pub lines: ItemLines,
@@ -37,45 +30,67 @@ impl DocItem<'_> {
     pub fn description(&self) -> String {
         format!("{} `{}`", self.kind.noun(), self.name)
     }
+
+    /// # Returns
+    ///
+    /// The item's own generic parameters. An impl method's generics don't include the impl's.
+    pub const fn generics(&self) -> &syn::Generics {
+        match self.kind {
+            DocItemKind::FreeFn(sig)
+            | DocItemKind::InherentMethod(sig)
+            | DocItemKind::TraitImplMethod(sig)
+            | DocItemKind::TraitMethod(sig) => &sig.generics,
+            DocItemKind::Struct(generics)
+            | DocItemKind::Enum(generics)
+            | DocItemKind::Union(generics)
+            | DocItemKind::Trait(generics)
+            | DocItemKind::TypeAlias(generics) => generics,
+        }
+    }
 }
 
-/// The kinds of [`DocItem`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum DocItemKind {
+/// The kinds of [`DocItem`], each with the signature of a fn or the generic parameters of another
+/// item.
+///
+/// # Type Parameters
+///
+/// * `'ast` - The lifetime of the syntax tree the item is in.
+#[derive(Clone, Copy)]
+pub enum DocItemKind<'ast> {
     /// A fn outside any impl or trait, including a fn nested in another fn's body.
-    FreeFn,
+    FreeFn(&'ast syn::Signature),
 
     /// A fn in an impl block without a trait.
-    InherentMethod,
+    InherentMethod(&'ast syn::Signature),
 
     /// A fn in an `impl Trait for Type` block.
-    TraitImplMethod,
+    TraitImplMethod(&'ast syn::Signature),
 
     /// A fn declared in a `trait` block, with or without a default body.
-    TraitMethod,
+    TraitMethod(&'ast syn::Signature),
 
-    Struct,
-    Enum,
-    Union,
-    Trait,
-    TypeAlias,
+    Struct(&'ast syn::Generics),
+    Enum(&'ast syn::Generics),
+    Union(&'ast syn::Generics),
+    Trait(&'ast syn::Generics),
+    TypeAlias(&'ast syn::Generics),
 }
 
-impl DocItemKind {
+impl DocItemKind<'_> {
     /// # Returns
     ///
     /// The noun that diagnostics name an item of this kind with, such as `fn` or `trait method`.
-    pub const fn noun(self) -> &'static str {
+    const fn noun(self) -> &'static str {
         match self {
-            Self::FreeFn => "fn",
-            Self::InherentMethod => "method",
-            Self::TraitImplMethod => "trait impl method",
-            Self::TraitMethod => "trait method",
-            Self::Struct => "struct",
-            Self::Enum => "enum",
-            Self::Union => "union",
-            Self::Trait => "trait",
-            Self::TypeAlias => "type alias",
+            Self::FreeFn(_) => "fn",
+            Self::InherentMethod(_) => "method",
+            Self::TraitImplMethod(_) => "trait impl method",
+            Self::TraitMethod(_) => "trait method",
+            Self::Struct(_) => "struct",
+            Self::Enum(_) => "enum",
+            Self::Union(_) => "union",
+            Self::Trait(_) => "trait",
+            Self::TypeAlias(_) => "type alias",
         }
     }
 }
@@ -110,7 +125,7 @@ struct ItemWalker<'ast> {
     include_tests: bool,
 
     /// Whether each impl block the walk is in implements a trait, innermost last.
-    impl_stack: Vec<bool>,
+    impl_stack: Vec<ImplKind>,
 
     doc_items: Vec<DocItem<'ast>>,
 }
@@ -120,19 +135,15 @@ impl<'ast> ItemWalker<'ast> {
     ///
     /// Whether an item with `attrs` is test code that the walk skips.
     fn is_skipped(&self, attrs: &[syn::Attribute], is_fn: bool) -> bool {
-        !self.include_tests
-            && (test_code::has_cfg_test(attrs)
-                || (is_fn && attrs.iter().any(test_code::is_test_attribute)))
+        !self.include_tests && test_code::is_test_item(attrs, is_fn)
     }
 
     /// Records the item printed by `item` unless it has no tokens after its attributes.
     fn add(
         &mut self,
-        kind: DocItemKind,
+        kind: DocItemKind<'ast>,
         ident: &syn::Ident,
         attrs: &'ast [syn::Attribute],
-        generics: &'ast syn::Generics,
-        sig: Option<&'ast syn::Signature>,
         item: &impl quote::ToTokens,
     ) {
         if let Some(lines) = item_lines::of(item) {
@@ -140,8 +151,6 @@ impl<'ast> ItemWalker<'ast> {
                 kind,
                 name: ident.to_string(),
                 attrs,
-                generics,
-                sig,
                 lines,
             });
         }
@@ -169,51 +178,39 @@ impl<'ast> Visit<'ast> for ItemWalker<'ast> {
         }
         match item {
             syn::Item::Fn(item_fn) => self.add(
-                DocItemKind::FreeFn,
+                DocItemKind::FreeFn(&item_fn.sig),
                 &item_fn.sig.ident,
                 &item_fn.attrs,
-                &item_fn.sig.generics,
-                Some(&item_fn.sig),
                 item_fn,
             ),
             syn::Item::Struct(item_struct) => self.add(
-                DocItemKind::Struct,
+                DocItemKind::Struct(&item_struct.generics),
                 &item_struct.ident,
                 &item_struct.attrs,
-                &item_struct.generics,
-                None,
                 item_struct,
             ),
             syn::Item::Enum(item_enum) => self.add(
-                DocItemKind::Enum,
+                DocItemKind::Enum(&item_enum.generics),
                 &item_enum.ident,
                 &item_enum.attrs,
-                &item_enum.generics,
-                None,
                 item_enum,
             ),
             syn::Item::Union(item_union) => self.add(
-                DocItemKind::Union,
+                DocItemKind::Union(&item_union.generics),
                 &item_union.ident,
                 &item_union.attrs,
-                &item_union.generics,
-                None,
                 item_union,
             ),
             syn::Item::Trait(item_trait) => self.add(
-                DocItemKind::Trait,
+                DocItemKind::Trait(&item_trait.generics),
                 &item_trait.ident,
                 &item_trait.attrs,
-                &item_trait.generics,
-                None,
                 item_trait,
             ),
             syn::Item::Type(item_type) => self.add(
-                DocItemKind::TypeAlias,
+                DocItemKind::TypeAlias(&item_type.generics),
                 &item_type.ident,
                 &item_type.attrs,
-                &item_type.generics,
-                None,
                 item_type,
             ),
             _ => {}
@@ -222,7 +219,11 @@ impl<'ast> Visit<'ast> for ItemWalker<'ast> {
     }
 
     fn visit_item_impl(&mut self, item_impl: &'ast syn::ItemImpl) {
-        self.impl_stack.push(item_impl.trait_.is_some());
+        self.impl_stack.push(if item_impl.trait_.is_some() {
+            ImplKind::Trait
+        } else {
+            ImplKind::Inherent
+        });
         syn::visit::visit_item_impl(self, item_impl);
         self.impl_stack.pop();
     }
@@ -231,17 +232,18 @@ impl<'ast> Visit<'ast> for ItemWalker<'ast> {
         if self.is_skipped(&impl_item_fn.attrs, true) {
             return;
         }
-        let kind = if self.impl_stack.last().copied().unwrap_or_default() {
-            DocItemKind::TraitImplMethod
-        } else {
-            DocItemKind::InherentMethod
+        let impl_kind = self
+            .impl_stack
+            .last()
+            .expect("an impl item fn is visited inside its impl block");
+        let kind = match impl_kind {
+            ImplKind::Inherent => DocItemKind::InherentMethod(&impl_item_fn.sig),
+            ImplKind::Trait => DocItemKind::TraitImplMethod(&impl_item_fn.sig),
         };
         self.add(
             kind,
             &impl_item_fn.sig.ident,
             &impl_item_fn.attrs,
-            &impl_item_fn.sig.generics,
-            Some(&impl_item_fn.sig),
             impl_item_fn,
         );
         syn::visit::visit_impl_item_fn(self, impl_item_fn);
@@ -252,26 +254,31 @@ impl<'ast> Visit<'ast> for ItemWalker<'ast> {
             return;
         }
         self.add(
-            DocItemKind::TraitMethod,
+            DocItemKind::TraitMethod(&trait_item_fn.sig),
             &trait_item_fn.sig.ident,
             &trait_item_fn.attrs,
-            &trait_item_fn.sig.generics,
-            Some(&trait_item_fn.sig),
             trait_item_fn,
         );
         syn::visit::visit_trait_item_fn(self, trait_item_fn);
     }
 }
 
+/// Whether an impl block implements a trait.
+#[derive(Debug)]
+enum ImplKind {
+    Inherent,
+    Trait,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn items(source_text: &str, include_tests: bool) -> Vec<(DocItemKind, String)> {
+    fn items(source_text: &str, include_tests: bool) -> Vec<String> {
         let syntax_tree = syn::parse_file(source_text).expect("valid file");
         collect(&syntax_tree, include_tests)
-            .into_iter()
-            .map(|doc_item| (doc_item.kind, doc_item.name))
+            .iter()
+            .map(DocItem::description)
             .collect()
     }
 
@@ -292,19 +299,19 @@ mod tests {
         assert_eq!(
             items(source_text, false),
             [
-                (DocItemKind::FreeFn, "free".to_owned()),
-                (DocItemKind::FreeFn, "nested".to_owned()),
-                (DocItemKind::Struct, "S".to_owned()),
-                (DocItemKind::Enum, "E".to_owned()),
-                (DocItemKind::Union, "U".to_owned()),
-                (DocItemKind::Trait, "T".to_owned()),
-                (DocItemKind::TraitMethod, "declared".to_owned()),
-                (DocItemKind::TraitMethod, "provided".to_owned()),
-                (DocItemKind::TypeAlias, "Alias".to_owned()),
-                (DocItemKind::InherentMethod, "inherent".to_owned()),
-                (DocItemKind::TraitImplMethod, "in_body".to_owned()),
-                (DocItemKind::TraitImplMethod, "implemented".to_owned()),
-                (DocItemKind::FreeFn, "in_mod".to_owned()),
+                "fn `free`",
+                "fn `nested`",
+                "struct `S`",
+                "enum `E`",
+                "union `U`",
+                "trait `T`",
+                "trait method `declared`",
+                "trait method `provided`",
+                "type alias `Alias`",
+                "method `inherent`",
+                "trait impl method `in_body`",
+                "trait impl method `implemented`",
+                "fn `in_mod`",
             ]
         );
     }
@@ -316,18 +323,23 @@ mod tests {
             "#[cfg(test)]\nmod tests { fn helper() {} }\n",
             "#[cfg(test)]\nstruct Fixture;\n",
             "impl S {\n    #[tokio::test]\n    async fn method_test() {}\n}\n",
+            "#[cfg(test)]\nimpl S { fn test_impl_method() {} }\n",
+            "trait T {\n    #[cfg(test)]\n    fn test_trait_method();\n}\n",
             "fn kept() {}\n",
         );
+        assert_eq!(items(source_text, false), ["trait `T`", "fn `kept`"]);
         assert_eq!(
-            items(source_text, false),
-            [(DocItemKind::FreeFn, "kept".to_owned())]
-        );
-        assert_eq!(
-            items(source_text, true)
-                .into_iter()
-                .map(|(_, name)| name)
-                .collect::<Vec<_>>(),
-            ["unit_test", "helper", "Fixture", "method_test", "kept"]
+            items(source_text, true),
+            [
+                "fn `unit_test`",
+                "fn `helper`",
+                "struct `Fixture`",
+                "method `method_test`",
+                "method `test_impl_method`",
+                "trait `T`",
+                "trait method `test_trait_method`",
+                "fn `kept`",
+            ]
         );
     }
 
@@ -339,7 +351,7 @@ mod tests {
         let doc_items = collect(&syntax_tree, false);
         let method = &doc_items[0];
         let generic_names: Vec<String> = method
-            .generics
+            .generics()
             .params
             .iter()
             .map(|param| match param {
@@ -349,7 +361,6 @@ mod tests {
             })
             .collect();
         assert_eq!(generic_names, ["'a", "Inner", "N"]);
-        assert!(method.sig.is_some());
         assert_eq!(method.attrs.len(), 1);
         assert_eq!(
             (
@@ -359,6 +370,5 @@ mod tests {
             ("2-3".to_owned(), "2-3".to_owned())
         );
         assert_eq!(method.description(), "method `method`");
-        assert_eq!(DocItemKind::TraitMethod.noun(), "trait method");
     }
 }

@@ -67,7 +67,7 @@ impl Checker {
 }
 
 /// The parameter names of a trait method, without its receiver.
-#[derive(Debug, Default, PartialEq, Eq)]
+#[derive(Debug, Default)]
 struct ParamNames {
     /// The names of the parameters bound by an identifier pattern, which must be documented.
     required: Vec<String>,
@@ -133,19 +133,13 @@ impl Visit<'_> for BindingCollector<'_> {
 ///
 /// The position and message of each finding. An undocumented item has none.
 fn item_findings(doc_item: &DocItem<'_>) -> Vec<(Position, String)> {
-    let doc_lines = doc_lines::collect(doc_item.attrs);
-    let Some(first_doc_line) = doc_lines.first() else {
+    let Some(doc_lines) = doc_lines::collect_documented(doc_item.attrs) else {
         return Vec::new();
     };
-    if doc_lines
-        .iter()
-        .all(|doc_line| doc_line.text.trim().is_empty())
-    {
-        return Vec::new();
-    }
+    let first_doc_line = &doc_lines[0];
     let description = doc_item.description();
     let section = PARAMETERS.parse(&doc_lines);
-    let (DocItemKind::TraitMethod, Some(sig)) = (doc_item.kind, doc_item.sig) else {
+    let DocItemKind::TraitMethod(sig) = doc_item.kind else {
         return section
             .map(|section| (section.header, misplaced_section_message(&description)))
             .into_iter()
@@ -185,10 +179,12 @@ fn misplaced_section_message(item: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::cell::RefCell;
     use std::path::Path;
 
     use super::*;
+    use crate::syntax::test_code::TestModuleCache;
+
+    const NO_FINDINGS: [String; 0] = [];
 
     /// Checks `source_text` as a file that no other file declares.
     ///
@@ -216,7 +212,7 @@ mod tests {
 
     fn diagnostics(source_text: &str, include_tests: bool) -> Vec<Diagnostic> {
         syn::parse_file(source_text).expect("valid file");
-        let test_module_cache = RefCell::default();
+        let test_module_cache = TestModuleCache::default();
         let context = FileContext::new(
             Path::new("nonexistent-fixture-directory/subject.rs"),
             source_text,
@@ -226,8 +222,6 @@ mod tests {
         diagnostics.sort_by_key(Diagnostic::position);
         diagnostics
     }
-
-    const NO_FINDINGS: [String; 0] = [];
 
     #[test]
     fn sections_that_document_every_parameter_are_clean() {

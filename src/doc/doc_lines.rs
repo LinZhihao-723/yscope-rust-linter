@@ -67,6 +67,19 @@ pub fn collect(attrs: &[syn::Attribute]) -> Vec<DocLine> {
     doc_lines
 }
 
+/// Collects the doc lines of `attrs`, as [`collect`] does, if they document the item.
+///
+/// # Returns
+///
+/// The doc lines, or [`None`] if none of them is non-blank.
+pub fn collect_documented(attrs: &[syn::Attribute]) -> Option<Vec<DocLine>> {
+    let doc_lines = collect(attrs);
+    doc_lines
+        .iter()
+        .any(|doc_line| !doc_line.text.trim().is_empty())
+        .then_some(doc_lines)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

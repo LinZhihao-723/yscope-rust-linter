@@ -1,6 +1,7 @@
 //! Deciding whether code is test-only: `#[test]` and `#[cfg(test)]` attributes, and out-of-line
 //! module files whose declaring file marks them `#[cfg(test)]`.
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::fs;
@@ -14,10 +15,7 @@ use proc_macro2::TokenTree;
 /// Decides, with caching across a run, whether a file is an out-of-line test module.
 #[derive(Debug, Default)]
 pub struct TestModuleCache {
-    /// Each candidate declaring file that was looked at, by path.
-    declaring_files: HashMap<PathBuf, DeclaringFile>,
-
-    verdicts: HashMap<PathBuf, TestModuleVerdict>,
+    files: RefCell<CachedFiles>,
 }
 
 impl TestModuleCache {
@@ -36,7 +34,67 @@ impl TestModuleCache {
     /// # Returns
     ///
     /// Whether `path` is an out-of-line test module, and the problem that may make that wrong.
-    pub fn verdict(&mut self, path: &Path) -> TestModuleVerdict {
+    pub fn verdict(&self, path: &Path) -> TestModuleVerdict {
+        self.files.borrow_mut().verdict(path)
+    }
+}
+
+/// Whether a file is an out-of-line test module.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TestModuleVerdict {
+    pub is_test_module: bool,
+
+    /// Why a candidate declaring file couldn't be used, if one couldn't.
+    pub problem: Option<String>,
+}
+
+/// # Returns
+///
+/// Whether `attrs` hold a `#[cfg(test)]` or a `#[cfg(all(.., test, ..))]` attribute.
+pub fn has_cfg_test(attrs: &[syn::Attribute]) -> bool {
+    attrs.iter().any(|attr| match &attr.meta {
+        syn::Meta::List(meta_list) if meta_list.path.is_ident("cfg") => {
+            cfg_requires_test(&meta_list.tokens)
+        }
+        _ => false,
+    })
+}
+
+/// # Returns
+///
+/// Whether `attr` marks a test fn: its path's last segment is `test`.
+pub fn is_test_attribute(attr: &syn::Attribute) -> bool {
+    attr.path()
+        .segments
+        .last()
+        .is_some_and(|segment| segment.ident == "test")
+}
+
+/// # Returns
+///
+/// Whether an item with `attrs` is test code: an item with `#[cfg(test)]`, or, if `is_fn`, a fn
+/// with an attribute that [`is_test_attribute`] accepts.
+pub fn is_test_item(attrs: &[syn::Attribute], is_fn: bool) -> bool {
+    has_cfg_test(attrs) || (is_fn && attrs.iter().any(is_test_attribute))
+}
+
+/// The files that a [`TestModuleCache`] has looked at.
+#[derive(Debug, Default)]
+struct CachedFiles {
+    /// Each candidate declaring file that was looked at, by path.
+    declaring_files: HashMap<PathBuf, DeclaringFile>,
+
+    verdicts: HashMap<PathBuf, TestModuleVerdict>,
+}
+
+impl CachedFiles {
+    /// Decides whether `path` is an out-of-line test module, as [`TestModuleCache::verdict`]
+    /// describes, caching the verdict.
+    ///
+    /// # Returns
+    ///
+    /// The verdict of `path`.
+    fn verdict(&mut self, path: &Path) -> TestModuleVerdict {
         if let Some(verdict) = self.verdicts.get(path) {
             return verdict.clone();
         }
@@ -47,8 +105,8 @@ impl TestModuleCache {
         verdict
     }
 
-    /// Decides the verdict of `path` from its candidate declaring files, as [`Self::verdict`]
-    /// describes.
+    /// Decides the verdict of `path` from its candidate declaring files, as
+    /// [`TestModuleCache::verdict`] describes.
     ///
     /// # Returns
     ///
@@ -100,37 +158,6 @@ impl TestModuleCache {
             .entry(candidate.to_path_buf())
             .or_insert_with(|| DeclaringFile::read(candidate))
     }
-}
-
-/// Whether a file is an out-of-line test module.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct TestModuleVerdict {
-    pub is_test_module: bool,
-
-    /// Why a candidate declaring file couldn't be used, if one couldn't.
-    pub problem: Option<String>,
-}
-
-/// # Returns
-///
-/// Whether `attrs` hold a `#[cfg(test)]` or a `#[cfg(all(.., test, ..))]` attribute.
-pub fn has_cfg_test(attrs: &[syn::Attribute]) -> bool {
-    attrs.iter().any(|attr| match &attr.meta {
-        syn::Meta::List(meta_list) if meta_list.path.is_ident("cfg") => {
-            cfg_requires_test(&meta_list.tokens)
-        }
-        _ => false,
-    })
-}
-
-/// # Returns
-///
-/// Whether `attr` marks a test fn: its path's last segment is `test`.
-pub fn is_test_attribute(attr: &syn::Attribute) -> bool {
-    attr.path()
-        .segments
-        .last()
-        .is_some_and(|segment| segment.ident == "test")
 }
 
 /// What a candidate declaring file holds.
@@ -322,8 +349,8 @@ mod tests {
         );
         write_file(&directory.join("app/app_tests.rs"), "");
 
-        let mut cache = TestModuleCache::default();
-        let mut is_test_module = |relative_path: &str| {
+        let cache = TestModuleCache::default();
+        let is_test_module = |relative_path: &str| {
             let verdict = cache.verdict(&src.join(relative_path));
             assert_eq!(verdict.problem, None, "{relative_path}");
             verdict.is_test_module

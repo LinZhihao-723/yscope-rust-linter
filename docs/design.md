@@ -259,9 +259,9 @@ Every rule is reached through `src/rules/registry.rs`:
   `FileContext` to it.
 
 The checkers keep no state across files. The cache of [out-of-line test
-module](#out-of-line-test-modules) verdicts is shared by every rule, so `FileChecker` owns it in a
-`RefCell` and lends it to each file's `FileContext`. The `comment-greedy-wrap` checker holds the
-width, and the other checkers hold `include_tests`.
+module](#out-of-line-test-modules) verdicts is shared by every rule, so `FileChecker` owns it and
+lends it to each file's `FileContext`. `TestModuleCache` keeps its interior mutability private. The
+`comment-greedy-wrap` checker holds the width, and the other checkers hold `include_tests`.
 
 ### Adding a rule
 
@@ -1187,12 +1187,13 @@ sections of either kind.
 `ParamSectionKind::parse(doc_lines)` selects the section with
 [`section::find`](#parsing-the--errors-section) and groups it with `DocSection::content`, so
 selection, fences, link definitions and continuation lines behave exactly as for `# Errors`. Each
-top-level bullet becomes a `ParamBullet`:
+top-level bullet becomes a `ParamBullet`, whose `BulletForm` is one of:
 
-* `name`: the code of the reference that starts the bullet, either a code span (`` `T` ``) or a code
-  link (``[`T`]``). A bullet that starts with prose has no name.
-* `is_canonical`: the bullet starts with a bare code span, then ` - `, then a non-blank description.
-  The description may continue on the next lines.
+* `Nameless`: the bullet starts with prose.
+* `NonCanonical { name }`: the bullet starts with a reference whose code is `name`, either a code
+  span (`` `T` ``) or a code link (``[`T`]``), but isn't canonical.
+* `Canonical { name }`: the bullet starts with a bare code span, then ` - `, then a non-blank
+  description. The description may continue on the next lines.
 
 Sub-bullets belong to their bullet and are never parameters. Prose in the section is ignored.
 
@@ -1228,13 +1229,14 @@ example ``fn `load` ``):
 The order of the bullets isn't checked against the order of the parameters.
 
 `syntax/doc_items.rs` walks the items both rules look at. `doc_items::collect(syntax_tree,
-include_tests)` returns a `DocItem` (kind, name, attributes, own generics, signature for a fn, and
-`ItemLines`) for every fn, struct, enum, union, trait and type alias, including the ones nested in
-modules and fn bodies. Its `DocItemKind` tells free fns, inherent methods, trait impl methods and
-trait method declarations apart. Unless `include_tests`, it skips `#[cfg(test)]` items with
-everything in them and fns with a `test` attribute, as the `errors-doc` item walk does. Whether an
-item is documented is up to the rule: an item is documented when `doc_lines::collect` gives at least
-one non-blank line.
+include_tests)` returns a `DocItem` (kind, name, attributes and `ItemLines`) for every fn, struct,
+enum, union, trait and type alias, including the ones nested in modules and fn bodies. Its
+`DocItemKind` tells free fns, inherent methods, trait impl methods and trait method declarations
+apart, and each kind carries the item's signature if it is a fn, or its generics otherwise.
+`DocItem::generics` gives the item's own generics either way. Unless `include_tests`, it skips
+`#[cfg(test)]` items with everything in them and fns with a `test` attribute, as the `errors-doc`
+item walk does. Both rules check only documented items: `doc_lines::collect_documented` gives an
+item's doc lines only when at least one of them is non-blank.
 
 ## symbol-order
 
@@ -1276,7 +1278,8 @@ In an inherent impl, associated types, macro invocations and verbatim items are 
 
 Each counted item gets a sort key. The scope is in order when the keys don't decrease.
 
-In a module, the key is `(group, category, anchor, impl rank)`:
+In a module, the key is `(group, category)`, and the type category carries `(anchor, impl rank)`
+(`Category::Type` in `keys.rs`), compared after the category itself:
 
 * `group`: the item's `VisibilityGroup` (`syntax/visibility.rs`): `pub`, `pub(crate)`,
   `pub(super)`, `pub(in path)`, private. `pub(in crate)` counts as `pub(crate)`, `pub(in super)` as
@@ -1285,9 +1288,9 @@ In a module, the key is `(group, category, anchor, impl rank)`:
 * `category`: const 0, static 1, type 2, fn 3. Structs, enums, unions, traits, trait aliases and
   type aliases are all types, in any order among themselves, and an impl block has its type's
   category.
-* `anchor`: for a type, its index in the module's items; for an impl block, its type's index; 0 for
-  consts, statics and fns. Types never conflict on it, since their indices increase in source order,
-  and it puts each impl block right after its own type.
+* `anchor`: for a type, its index in the module's items; for an impl block, its type's index. Types
+  never conflict on it, since their indices increase in source order, and it puts each impl block
+  right after its own type.
 * `impl rank`: 0 for the type itself, 1 for an inherent impl, 2 for an impl of a crate-local trait,
   3 for an impl of any other trait.
 
@@ -1327,8 +1330,8 @@ non-decreasing subsequence that starts at each index, then a greedy walk that st
 L[i] - 1`. Scopes hold at most a few hundred items, so the quadratic cost is negligible.
 
 A flagged item always conflicts with some kept item: with no larger kept item before it and no
-smaller kept item after it, it would extend the kept subsequence. `moves::place` returns `None` in
-that impossible case, and the item gets no diagnostic rather than a panic.
+smaller kept item after it, it would extend the kept subsequence. `moves::place` panics in that
+impossible case, since it means `moves::kept` is wrong.
 
 ### symbol-order diagnostics
 

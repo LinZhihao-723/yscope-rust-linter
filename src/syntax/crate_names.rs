@@ -6,7 +6,7 @@ use std::collections::HashSet;
 use syn::visit::Visit;
 
 /// The names through which one file refers to items of its own crate.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug)]
 pub struct CrateNames {
     names: HashSet<String>,
 }
@@ -27,15 +27,14 @@ impl CrateNames {
             names: HashSet::new(),
         };
         definition_collector.visit_file(syntax_tree);
-        let module_names = definition_collector.names.clone();
         let mut use_collector = UseCollector {
-            module_names: &module_names,
-            names: definition_collector.names,
+            defined_names: &definition_collector.names,
+            names: HashSet::new(),
         };
         use_collector.visit_file(syntax_tree);
-        Self {
-            names: use_collector.names,
-        }
+        let mut names = use_collector.names;
+        names.extend(definition_collector.names);
+        Self { names }
     }
 
     /// Decides whether `path` names an item of the crate: its first segment is `crate`, `self` or
@@ -86,7 +85,7 @@ impl<'ast> Visit<'ast> for DefinitionCollector {
 struct UseCollector<'names> {
     /// The names of the traits and modules the file defines, which a crate-local import may start
     /// with.
-    module_names: &'names HashSet<String>,
+    defined_names: &'names HashSet<String>,
 
     names: HashSet<String>,
 }
@@ -94,17 +93,25 @@ struct UseCollector<'names> {
 impl UseCollector<'_> {
     /// Adds the names that `use_tree` imports from the crate.
     ///
-    /// * `is_crate_local` says whether the path before `use_tree` is crate-local. It is [`None`] at
-    ///   the root of the `use`, where the first segment of the path decides it.
+    /// * `locality` says whether the path before `use_tree` is crate-local. It is
+    ///   [`PathLocality::Undecided`] at the root of the `use`, where the first segment of the path
+    ///   decides it.
     /// * `parent` is the last segment before `use_tree`, which a `self` in a group names.
-    fn add(&mut self, use_tree: &syn::UseTree, is_crate_local: Option<bool>, parent: Option<&str>) {
+    fn add(&mut self, use_tree: &syn::UseTree, locality: PathLocality, parent: Option<&str>) {
         match use_tree {
             syn::UseTree::Path(use_path) => {
                 let segment = use_path.ident.to_string();
-                let is_crate_local = is_crate_local.unwrap_or_else(|| {
-                    is_crate_root(&segment) || self.module_names.contains(&segment)
-                });
-                self.add(&use_path.tree, Some(is_crate_local), Some(&segment));
+                let locality = match locality {
+                    PathLocality::Undecided => {
+                        if is_crate_root(&segment) || self.defined_names.contains(&segment) {
+                            PathLocality::CrateLocal
+                        } else {
+                            PathLocality::External
+                        }
+                    }
+                    PathLocality::CrateLocal | PathLocality::External => locality,
+                };
+                self.add(&use_path.tree, locality, Some(&segment));
             }
             syn::UseTree::Name(use_name) => {
                 let name = use_name.ident.to_string();
@@ -113,20 +120,20 @@ impl UseCollector<'_> {
                 } else {
                     Some(name)
                 };
-                if is_crate_local == Some(true)
+                if locality == PathLocality::CrateLocal
                     && let Some(imported) = imported
                 {
                     self.names.insert(imported);
                 }
             }
             syn::UseTree::Rename(use_rename) => {
-                if is_crate_local == Some(true) {
+                if locality == PathLocality::CrateLocal {
                     self.names.insert(use_rename.rename.to_string());
                 }
             }
             syn::UseTree::Group(use_group) => {
                 for item in &use_group.items {
-                    self.add(item, is_crate_local, parent);
+                    self.add(item, locality, parent);
                 }
             }
             syn::UseTree::Glob(_) => {}
@@ -136,9 +143,23 @@ impl UseCollector<'_> {
 
 impl<'ast> Visit<'ast> for UseCollector<'_> {
     fn visit_item_use(&mut self, item_use: &'ast syn::ItemUse) {
-        let is_crate_local = item_use.leading_colon.is_some().then_some(false);
-        self.add(&item_use.tree, is_crate_local, None);
+        let locality = if item_use.leading_colon.is_some() {
+            PathLocality::External
+        } else {
+            PathLocality::Undecided
+        };
+        self.add(&item_use.tree, locality, None);
     }
+}
+
+/// Whether the path before a use tree names an item of the crate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PathLocality {
+    /// The use tree is the root of its `use`, so its first segment decides.
+    Undecided,
+
+    CrateLocal,
+    External,
 }
 
 /// # Returns

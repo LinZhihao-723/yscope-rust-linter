@@ -1,7 +1,7 @@
 //! Choosing the items of a scope that stay in place, and where each of the other items belongs.
 
 /// Where a misplaced item belongs among the kept items, and the kept item it conflicts with.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct Placement {
     /// The index of the kept item that the misplaced item should come next to.
     pub reference: usize,
@@ -37,12 +37,12 @@ impl Direction {
 ///
 /// # Type Parameters
 ///
-/// * `Key` - The type of the sort keys.
+/// * `KeyType` - The type of the sort keys.
 ///
 /// # Returns
 ///
 /// Whether each item is kept, by index.
-pub fn kept<Key: Ord>(keys: &[Key]) -> Vec<bool> {
+pub fn kept<KeyType: Ord>(keys: &[KeyType]) -> Vec<bool> {
     let mut lengths = vec![1_usize; keys.len()];
     for index in (0..keys.len()).rev() {
         lengths[index] = 1
@@ -74,13 +74,17 @@ pub fn kept<Key: Ord>(keys: &[Key]) -> Vec<bool> {
 ///
 /// # Type Parameters
 ///
-/// * `Key` - The type of the sort keys.
+/// * `KeyType` - The type of the sort keys.
 ///
 /// # Returns
 ///
-/// The item's placement, or [`None`] if no kept item conflicts with it, which only happens if
-/// `is_kept` doesn't mark a longest non-decreasing subsequence of `keys`.
-pub fn place<Key: Ord>(keys: &[Key], is_kept: &[bool], index: usize) -> Option<Placement> {
+/// The item's placement.
+///
+/// # Panics
+///
+/// Panics if no kept item conflicts with the item, which means `is_kept` doesn't mark a longest
+/// non-decreasing subsequence of `keys`.
+pub fn place<KeyType: Ord>(keys: &[KeyType], is_kept: &[bool], index: usize) -> Placement {
     let kept_indices: Vec<usize> = (0..keys.len())
         .filter(|&kept_index| is_kept[kept_index])
         .collect();
@@ -101,11 +105,11 @@ pub fn place<Key: Ord>(keys: &[Key], is_kept: &[bool], index: usize) -> Option<P
                 .rev()
                 .find(|&&kept_index| kept_index > index && keys[kept_index] < keys[index])
         });
-    Some(Placement {
-        reference: reference?,
+    Placement {
+        reference: reference.expect("a misplaced item implies a kept item"),
         direction,
-        conflict: *conflict?,
-    })
+        conflict: *conflict.expect("a misplaced item conflicts with a kept item"),
+    }
 }
 
 #[cfg(test)]
@@ -121,6 +125,90 @@ mod tests {
             .enumerate()
             .filter_map(|(index, is_kept)| (!is_kept).then_some(index))
             .collect()
+    }
+
+    /// # Returns
+    ///
+    /// Every sequence of at most `max_length` keys from `0..alphabet_size`.
+    fn key_sequences(max_length: usize, alphabet_size: u8) -> Vec<Vec<u8>> {
+        let mut sequences = vec![Vec::new()];
+        let mut previous_round = vec![Vec::new()];
+        for _ in 0..max_length {
+            previous_round = previous_round
+                .iter()
+                .flat_map(|prefix: &Vec<u8>| {
+                    (0..alphabet_size).map(move |key| [prefix.as_slice(), &[key]].concat())
+                })
+                .collect();
+            sequences.extend(previous_round.iter().cloned());
+        }
+        sequences
+    }
+
+    /// Tries every subsequence of `keys`.
+    ///
+    /// # Returns
+    ///
+    /// The indices of the non-decreasing subsequence of `keys` that is longest, and among the
+    /// longest ones, lexicographically smallest.
+    fn brute_force_kept_indices(keys: &[u8]) -> Vec<usize> {
+        (0_u32..1 << keys.len())
+            .map(|mask| {
+                (0..keys.len())
+                    .filter(|&index| mask & (1 << index) != 0)
+                    .collect::<Vec<usize>>()
+            })
+            .filter(|indices| {
+                indices
+                    .windows(2)
+                    .all(|pair| keys[pair[0]] <= keys[pair[1]])
+            })
+            .min_by(|left, right| right.len().cmp(&left.len()).then_with(|| left.cmp(right)))
+            .expect("the empty subsequence is non-decreasing")
+    }
+
+    #[test]
+    fn kept_and_place_hold_their_invariants_on_every_short_key_sequence() {
+        for keys in key_sequences(6, 3) {
+            let is_kept = kept(&keys);
+            let kept_indices: Vec<usize> =
+                (0..keys.len()).filter(|&index| is_kept[index]).collect();
+            assert_eq!(
+                kept_indices,
+                brute_force_kept_indices(&keys),
+                "keys: {keys:?}"
+            );
+            for index in (0..keys.len()).filter(|&index| !is_kept[index]) {
+                let placement = place(&keys, &is_kept, index);
+                assert!(
+                    is_kept[placement.reference],
+                    "keys: {keys:?}, index: {index}"
+                );
+                assert!(
+                    is_kept[placement.conflict],
+                    "keys: {keys:?}, index: {index}"
+                );
+                let conflict = placement.conflict;
+                assert!(
+                    (conflict < index && keys[conflict] > keys[index])
+                        || (conflict > index && keys[conflict] < keys[index]),
+                    "keys: {keys:?}, index: {index}"
+                );
+                let mut placed_keys: Vec<u8> = Vec::new();
+                for &kept_index in &kept_indices {
+                    if kept_index == placement.reference && placement.direction == Direction::Before
+                    {
+                        placed_keys.push(keys[index]);
+                    }
+                    placed_keys.push(keys[kept_index]);
+                    if kept_index == placement.reference && placement.direction == Direction::After
+                    {
+                        placed_keys.push(keys[index]);
+                    }
+                }
+                assert!(placed_keys.is_sorted(), "keys: {keys:?}, index: {index}");
+            }
+        }
     }
 
     #[test]
@@ -146,22 +234,22 @@ mod tests {
         let is_kept = kept(&keys);
         assert_eq!(
             place(&keys, &is_kept, 3),
-            Some(Placement {
+            Placement {
                 reference: 0,
                 direction: Direction::After,
                 conflict: 1,
-            })
+            }
         );
 
         let keys = [2, 2, 0, 3];
         let is_kept = kept(&keys);
         assert_eq!(
             place(&keys, &is_kept, 2),
-            Some(Placement {
+            Placement {
                 reference: 0,
                 direction: Direction::Before,
                 conflict: 0,
-            })
+            }
         );
     }
 
@@ -171,11 +259,11 @@ mod tests {
         let is_kept = kept(&keys);
         assert_eq!(
             place(&keys, &is_kept, 0),
-            Some(Placement {
+            Placement {
                 reference: 3,
                 direction: Direction::After,
                 conflict: 3,
-            })
+            }
         );
     }
 }

@@ -49,7 +49,7 @@ impl Checker {
         }
         doc_items::collect(syntax_tree, self.include_tests)
             .iter()
-            .filter(|doc_item| doc_item.kind != DocItemKind::TraitImplMethod)
+            .filter(|doc_item| !matches!(doc_item.kind, DocItemKind::TraitImplMethod(_)))
             .flat_map(|doc_item| {
                 item_findings(doc_item)
                     .into_iter()
@@ -69,17 +69,11 @@ impl Checker {
 ///
 /// The position and message of each finding. An undocumented item has none.
 fn item_findings(doc_item: &DocItem<'_>) -> Vec<(Position, String)> {
-    let doc_lines = doc_lines::collect(doc_item.attrs);
-    let Some(first_doc_line) = doc_lines.first() else {
+    let Some(doc_lines) = doc_lines::collect_documented(doc_item.attrs) else {
         return Vec::new();
     };
-    if doc_lines
-        .iter()
-        .all(|doc_line| doc_line.text.trim().is_empty())
-    {
-        return Vec::new();
-    }
-    let names = generic_param_names(doc_item.generics);
+    let first_doc_line = &doc_lines[0];
+    let names = generic_param_names(doc_item.generics());
     let description = doc_item.description();
     match TYPE_PARAMETERS.parse(&doc_lines) {
         None if names.is_empty() => Vec::new(),
@@ -122,10 +116,12 @@ fn generic_param_names(generics: &syn::Generics) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use std::cell::RefCell;
     use std::path::Path;
 
     use super::*;
+    use crate::syntax::test_code::TestModuleCache;
+
+    const NO_FINDINGS: [String; 0] = [];
 
     /// Checks `source_text` as a file that no other file declares.
     ///
@@ -153,7 +149,7 @@ mod tests {
 
     fn diagnostics(source_text: &str, include_tests: bool) -> Vec<Diagnostic> {
         syn::parse_file(source_text).expect("valid file");
-        let test_module_cache = RefCell::default();
+        let test_module_cache = TestModuleCache::default();
         let context = FileContext::new(
             Path::new("nonexistent-fixture-directory/subject.rs"),
             source_text,
@@ -163,8 +159,6 @@ mod tests {
         diagnostics.sort_by_key(Diagnostic::position);
         diagnostics
     }
-
-    const NO_FINDINGS: [String; 0] = [];
 
     #[test]
     fn sections_that_document_every_parameter_are_clean() {

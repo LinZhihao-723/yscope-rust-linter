@@ -6,6 +6,7 @@ use proc_macro2::TokenTree;
 use quote::ToTokens;
 use syn::visit::Visit;
 
+use crate::diagnostic::Position;
 use crate::line_ranges::LineSpan;
 use crate::syntax::span;
 
@@ -44,6 +45,18 @@ pub fn collect(syntax_tree: &syn::File) -> Vec<ItemLines> {
 /// The lines of `item`, or [`None`] if it has no token after its outer attributes.
 pub fn of(item: &impl ToTokens) -> Option<ItemLines> {
     lines_of(item.to_token_stream())
+}
+
+/// Finds the first token of `item` after its outer attributes.
+///
+/// # Returns
+///
+/// The token's position, or [`None`] if `item` has no token after its attributes.
+pub fn own_start(item: &impl ToTokens) -> Option<Position> {
+    let token_trees: Vec<TokenTree> = item.to_token_stream().into_iter().collect();
+    Some(span::start_position(
+        token_trees.get(attrs_end(&token_trees))?.span(),
+    ))
 }
 
 /// The `syn` visitor that collects [`ItemLines`].
@@ -111,6 +124,20 @@ impl<'ast> Visit<'ast> for ItemCollector {
 /// The item's lines, or [`None`] if it has no token after its attributes.
 fn lines_of(tokens: TokenStream) -> Option<ItemLines> {
     let token_trees: Vec<TokenTree> = tokens.into_iter().collect();
+    let first_line = span::start_position(token_trees.first()?.span()).line;
+    let own_line = span::start_position(token_trees.get(attrs_end(&token_trees))?.span()).line;
+    let last_line = span::end_line(token_trees.last()?.span());
+    Some(ItemLines {
+        span: LineSpan::new(first_line, last_line)?,
+        header: LineSpan::new(first_line, own_line)?,
+    })
+}
+
+/// # Returns
+///
+/// The index of the first of `token_trees` after the leading `#` and `[..]` pairs of the outer
+/// attributes.
+fn attrs_end(token_trees: &[TokenTree]) -> usize {
     let mut own_start = 0;
     while let (Some(TokenTree::Punct(punct)), Some(TokenTree::Group(group))) =
         (token_trees.get(own_start), token_trees.get(own_start + 1))
@@ -119,13 +146,7 @@ fn lines_of(tokens: TokenStream) -> Option<ItemLines> {
     {
         own_start += 2;
     }
-    let first_line = span::start_position(token_trees.first()?.span()).line;
-    let own_line = span::start_position(token_trees.get(own_start)?.span()).line;
-    let last_line = span::end_line(token_trees.last()?.span());
-    Some(ItemLines {
-        span: LineSpan::new(first_line, last_line)?,
-        header: LineSpan::new(first_line, own_line)?,
-    })
+    own_start
 }
 
 #[cfg(test)]

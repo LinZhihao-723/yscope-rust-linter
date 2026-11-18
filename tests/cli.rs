@@ -211,24 +211,38 @@ fn include_tests_flag_checks_test_fns() {
 }
 
 #[test]
-fn symbol_order_skips_out_of_line_test_modules_unless_tests_are_included() {
+fn syntax_tree_rules_skip_out_of_line_test_modules_unless_tests_are_included() {
     let directory =
-        test_directory("symbol_order_skips_out_of_line_test_modules_unless_tests_are_included");
+        test_directory("syntax_tree_rules_skip_out_of_line_test_modules_unless_tests_are_included");
     write_file(&directory, "src/lib.rs", "#[cfg(test)]\nmod tests;\n");
-    write_file(&directory, "src/tests.rs", "fn a() {}\npub fn b() {}\n");
-    let output = run(&directory, &["--rule", "symbol-order", "src"], "");
-    assert_eq!(output.status.code(), Some(0));
-
-    let output = run(
+    write_file(
         &directory,
-        &["--rule", "symbol-order", "--include-tests", "src"],
-        "",
+        "src/tests.rs",
+        concat!(
+            "/// A wrapper.\n",
+            "pub struct Wrapper<T>(T);\n",
+            "pub trait Store {\n",
+            "    /// Loads.\n",
+            "    fn load(&self, key: u8);\n",
+            "}\n",
+            "fn a() {}\n",
+            "pub fn b() {}\n",
+        ),
     );
+    let output = run(&directory, &["src"], "");
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(stdout_lines(&output), Vec::<String>::new());
+
+    let output = run(&directory, &["--include-tests", "src"], "");
     assert_eq!(
         stdout_lines(&output),
         [
-            "src/tests.rs:2:1: symbol-order: pub fn `b` should come before private fn `a`: pub \
-             items come before private items"
+            "src/tests.rs:1:1: type-params-doc: struct `Wrapper` has generic parameters but no `# \
+             Type Parameters` section; add one with a bullet for each of `T`",
+            "src/tests.rs:4:5: trait-params-doc: trait method `load` has parameters but no `# \
+             Parameters` section; add one with a bullet for each of `key`",
+            "src/tests.rs:8:1: symbol-order: pub fn `b` should come after pub trait `Store`: pub \
+             items come before private items",
         ]
     );
 }

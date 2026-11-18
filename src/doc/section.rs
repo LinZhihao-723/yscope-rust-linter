@@ -10,14 +10,14 @@ use crate::markdown;
 use crate::markdown::FenceTracker;
 
 /// The `# Title` section of an item's docstring.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug)]
 pub struct DocSection {
     /// The position of the section's header.
     pub header: Position,
 
     /// The indices of the doc lines after the header, through the line before the next header of
     /// the same or a smaller level.
-    pub body: Range<usize>,
+    body: Range<usize>,
 
     /// The positions of the later headers with the same title and level.
     pub duplicate_headers: Vec<Position>,
@@ -27,10 +27,13 @@ impl DocSection {
     /// Groups the section's body lines:
     ///
     /// * Fenced code blocks, link reference definitions and blank lines are skipped.
-    /// * Bullets at the body's smallest bullet indent are top-level bullets. Deeper bullets belong
-    ///   to the preceding top-level bullet.
+    /// * Bullets at the body's smallest bullet indent are top-level bullets. A deeper bullet
+    ///   belongs to the preceding top-level bullet. If no top-level bullet precedes it, or prose
+    ///   comes between them, it is prose, marker included.
     /// * A non-blank, non-bullet line indented at least to an open bullet's content indent
     ///   continues that bullet, and is joined to it with one space.
+    /// * A non-bullet line after a blank line, indented at least to the last top-level bullet's
+    ///   content indent, is a later paragraph of that bullet, and is skipped.
     /// * Other non-bullet lines are prose. Headers deeper than the section's are prose too.
     ///
     /// # Returns
@@ -48,7 +51,7 @@ impl DocSection {
 }
 
 /// The lines of a section's body, grouped into prose paragraphs, top-level bullets and sub-bullets.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Default, PartialEq, Eq)]
 pub struct SectionContent {
     /// The prose paragraphs, each with its lines joined with one space.
     pub prose: Vec<String>,
@@ -60,7 +63,7 @@ pub struct SectionContent {
 }
 
 /// A top-level bullet of a section, with its continuation lines joined.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct Bullet {
     /// The bullet's text after its marker, with its continuation lines joined with one space.
     pub text: String,
@@ -69,22 +72,22 @@ pub struct Bullet {
     pub position: Position,
 
     /// The column, counted from the start of the line, where the bullet's text starts.
-    pub content_indent: usize,
+    content_indent: usize,
 
     pub sub_bullets: Vec<SubBullet>,
 }
 
 /// A bullet nested in a top-level bullet, with its continuation lines joined.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct SubBullet {
     /// The sub-bullet's text after its marker, with its continuation lines joined with one space.
     pub text: String,
 
     /// The position of the sub-bullet's first line.
-    pub position: Position,
+    position: Position,
 
     /// The column, counted from the start of the line, where the sub-bullet's text starts.
-    pub content_indent: usize,
+    content_indent: usize,
 }
 
 /// The first line of a section's body outside fences and link reference definitions.
@@ -154,7 +157,6 @@ struct Header<'doc> {
 }
 
 /// The item that the next continuation line may extend.
-#[derive(Clone, Copy)]
 enum OpenItem {
     Prose { index: usize },
     Bullet { index: usize },
@@ -428,6 +430,20 @@ mod tests {
                 is_prose: true,
             })
         );
+    }
+
+    #[test]
+    fn later_bullet_paragraphs_are_dropped_and_deeper_bullets_after_prose_are_prose() {
+        let text = "# Parameters\n\n* `a` - The first.\n\n  More about `a`.\n\nProse.\n  * A \
+                    deeper bullet.\n* `b` - The second.";
+        let content = content_of(text, "Parameters");
+        assert_eq!(content.prose, ["Prose.", "* A deeper bullet."]);
+        let bullets: Vec<(&str, usize)> = content
+            .bullets
+            .iter()
+            .map(|bullet| (bullet.text.as_str(), bullet.sub_bullets.len()))
+            .collect();
+        assert_eq!(bullets, [("`a` - The first.", 0), ("`b` - The second.", 0)]);
     }
 
     #[test]

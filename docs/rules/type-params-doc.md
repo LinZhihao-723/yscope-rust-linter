@@ -236,8 +236,8 @@ When the rule is wrong for an item, suppress it with a reason:
 ```rust
 // yscope-rust-linter: allow(type-params-doc): the parameters mirror `JobState`'s, documented there
 /// A handle to a job's state.
-struct JobStateHandle<R, T> {
-    state: JobState<R, T>,
+struct JobStateHandle<OutputType, TaskType> {
+    state: JobState<OutputType, TaskType>,
 }
 ```
 

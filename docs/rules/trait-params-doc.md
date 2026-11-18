@@ -183,7 +183,7 @@ Every diagnostic has the code `trait-params-doc`.
 | Message | Cause | Fix |
 | ------- | ----- | --- |
 | `` trait method `f` has parameters but no `# Parameters` section; add one with a bullet for each of `a`, `b` `` | The trait method has parameters that need a bullet, and its docstring has no section. Reported at the docstring's first line. | Add the section with a bullet per parameter. |
-| `` trait method `f` has no parameters; remove the `# Parameters` section `` | The trait method has no parameters besides its receiver and `_`. Reported at the header. | Remove the section. |
+| `` trait method `f` has no parameters; remove the `# Parameters` section `` | The trait method has no parameters besides its receiver, `_` and patterns that bind no name. Reported at the header. | Remove the section. |
 | `` `# Parameters` belongs only in trait method declarations; remove it from I `` | The item isn't a trait method declaration. Reported at the header. | Remove the section. |
 | `` `# Parameters` doesn't document `a`; add "* `a` - ..." `` | No bullet names `a`. Reported at the header. | Add a bullet for `a`. |
 | `` `# Parameters` documents `x`, which isn't a parameter of trait method `f`; remove the bullet `` | The bullet names something that isn't a parameter. | Remove the bullet, or fix the name. |

@@ -874,11 +874,13 @@ fn format_message(kind: &FormatFindingKind, param_names: &[String]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::cell::RefCell;
     use std::path::Path;
 
     use super::*;
     use crate::line_ranges::LineSpan;
+    use crate::syntax::test_code::TestModuleCache;
+
+    const INTRO_MESSAGE: &str = "start the `# Errors` section with";
 
     /// Checks `source_text` as a file that no other file declares.
     ///
@@ -907,11 +909,9 @@ mod tests {
             .collect()
     }
 
-    const INTRO_MESSAGE: &str = "start the `# Errors` section with";
-
     fn all_findings(source_text: &str) -> Vec<String> {
         syn::parse_file(source_text).expect("valid file");
-        let test_module_cache = RefCell::default();
+        let test_module_cache = TestModuleCache::default();
         let context = FileContext::new(
             Path::new("nonexistent-fixture-directory/subject.rs"),
             source_text,
@@ -1237,7 +1237,7 @@ mod tests {
     #[test]
     fn findings_are_anchored_to_the_whole_fn_and_its_header() {
         let source_text = subject(&[], "    load()?;\n    Ok(())");
-        let test_module_cache = RefCell::default();
+        let test_module_cache = TestModuleCache::default();
         let context = FileContext::new(
             Path::new("nonexistent-fixture-directory/subject.rs"),
             &source_text,

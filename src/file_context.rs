@@ -32,7 +32,7 @@ pub struct FileContext<'source> {
     lex_error: Option<LexError>,
     parsed_comments: ParsedComments,
     syntax_tree: OnceCell<syn::Result<syn::File>>,
-    test_module_cache: &'source RefCell<TestModuleCache>,
+    test_module_cache: &'source TestModuleCache,
     test_module_verdict: OnceCell<TestModuleVerdict>,
 
     /// The rules that asked for the syntax tree of a file that `syn` fails to parse.
@@ -55,7 +55,7 @@ impl<'source> FileContext<'source> {
     pub fn new(
         path: &'source Path,
         source_text: &'source str,
-        test_module_cache: &'source RefCell<TestModuleCache>,
+        test_module_cache: &'source TestModuleCache,
     ) -> Self {
         let lexed = lexer::lex(source_text);
         Self {
@@ -109,7 +109,7 @@ impl<'source> FileContext<'source> {
     pub fn is_test_module(&self, rule_id: RuleId) -> bool {
         let verdict = self
             .test_module_verdict
-            .get_or_init(|| self.test_module_cache.borrow_mut().verdict(self.path));
+            .get_or_init(|| self.test_module_cache.verdict(self.path));
         if verdict.problem.is_some() {
             record(&self.rules_unsure_of_test_module, rule_id);
         }
@@ -294,7 +294,7 @@ mod tests {
     use super::*;
 
     fn finished(source_text: &str) -> Vec<(DiagnosticCode, usize, String)> {
-        let test_module_cache = RefCell::default();
+        let test_module_cache = TestModuleCache::default();
         FileContext::new(Path::new("a.rs"), source_text, &test_module_cache)
             .finish(Vec::new(), &RuleSet::all())
             .iter()
@@ -336,7 +336,7 @@ mod tests {
 
     #[test]
     fn syn_failure_is_one_parse_error_that_names_every_skipped_rule() {
-        let test_module_cache = RefCell::default();
+        let test_module_cache = TestModuleCache::default();
         let context = FileContext::new(Path::new("a.rs"), "fn f( {}\n", &test_module_cache);
         for rule_id in [
             RuleId::TypeParamsDoc,
@@ -371,7 +371,7 @@ mod tests {
     #[test]
     fn allow_item_locates_its_item_in_the_lazily_parsed_tree() {
         let source_text = "// yscope-rust-linter: allow-item(errors-doc): reason\nfn f() {}\n";
-        let test_module_cache = RefCell::default();
+        let test_module_cache = TestModuleCache::default();
         let context = FileContext::new(Path::new("a.rs"), source_text, &test_module_cache);
         let finding = Diagnostic::new(
             RuleId::ErrorsDoc.into(),

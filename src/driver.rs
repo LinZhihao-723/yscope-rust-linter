@@ -1,7 +1,6 @@
 //! The lint run: discovering files, running each enabled rule on them, applying suppressions and
 //! line filters, and sorting the result.
 
-use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::Read;
@@ -95,7 +94,7 @@ struct FileChecker {
 
     /// The out-of-line test module verdicts, shared by the rules through each file's
     /// [`FileContext`].
-    test_module_cache: RefCell<TestModuleCache>,
+    test_module_cache: TestModuleCache,
 }
 
 impl FileChecker {
@@ -112,7 +111,7 @@ impl FileChecker {
                 .filter(|rule_id| config.rule_set.contains(*rule_id))
                 .map(|rule_id| Rule::new(rule_id, config))
                 .collect(),
-            test_module_cache: RefCell::default(),
+            test_module_cache: TestModuleCache::default(),
         }
     }
 

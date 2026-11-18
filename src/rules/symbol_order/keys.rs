@@ -19,14 +19,19 @@ pub trait SortKey: Copy + Ord {
 }
 
 /// The kind of a module item, ordered as the convention lists the kinds within a visibility group.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Category {
     Const,
     Static,
 
     /// Structs, enums, unions, traits, trait aliases and type aliases, and the impl blocks of
     /// structs, enums and unions.
-    Type,
+    Type {
+        /// The index of the type in the module's items, shared by its impl blocks.
+        anchor: usize,
+
+        impl_rank: ImplRank,
+    },
 
     Fn,
 }
@@ -39,16 +44,18 @@ impl Category {
         match self {
             Self::Const => "consts",
             Self::Static => "statics",
-            Self::Type => "types and their impls",
+            Self::Type { .. } => "types and their impls",
             Self::Fn => "fns",
         }
     }
 }
 
-/// The place of a type or one of its impl blocks among the type and its impl blocks.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+/// The place of a type or one of its impl blocks among the type and its impl blocks, ordered as the
+/// convention lists them: the type, its inherent impls, the impls of crate traits, then the impls
+/// of external traits. The derived `Ord` relies on this declaration order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ImplRank {
-    /// The type itself, or an item that is not a type.
+    /// The type itself.
     Type,
 
     Inherent,
@@ -70,54 +77,55 @@ impl ImplRank {
     }
 }
 
-/// The sort key of an item in a module.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+/// The sort key of an item in a module. The derived `Ord` compares the fields in declaration order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ModuleKey {
     pub group: VisibilityGroup,
     pub category: Category,
-
-    /// The index of a type in the module's items, shared by its impl blocks, or 0 for an item that
-    /// is neither.
-    pub anchor: usize,
-
-    pub impl_rank: ImplRank,
 }
 
 impl SortKey for ModuleKey {
     fn reason(smaller: Self, larger: Self) -> String {
         if smaller.group != larger.group {
-            format!(
+            return format!(
                 "{} items come before {} items",
                 smaller.group.as_str(),
                 larger.group.as_str()
-            )
-        } else if smaller.category != larger.category {
-            format!(
+            );
+        }
+        match (smaller.category, larger.category) {
+            (
+                Category::Type {
+                    anchor: smaller_anchor,
+                    impl_rank: smaller_impl_rank,
+                },
+                Category::Type {
+                    anchor: larger_anchor,
+                    impl_rank: larger_impl_rank,
+                },
+            ) => {
+                if smaller_anchor != larger_anchor || smaller_impl_rank == ImplRank::Type {
+                    "a type's impl blocks directly follow it".to_owned()
+                } else {
+                    format!(
+                        "{} come before {}",
+                        smaller_impl_rank.plural(),
+                        larger_impl_rank.plural()
+                    )
+                }
+            }
+            (smaller_category, larger_category) => format!(
                 "{} come before {}",
-                smaller.category.plural(),
-                larger.category.plural()
-            )
-        } else if smaller.anchor != larger.anchor || smaller.impl_rank == ImplRank::Type {
-            "a type's impl blocks directly follow it".to_owned()
-        } else {
-            format!(
-                "{} come before {}",
-                smaller.impl_rank.plural(),
-                larger.impl_rank.plural()
-            )
+                smaller_category.plural(),
+                larger_category.plural()
+            ),
         }
     }
 }
 
-/// The kind of an item in an inherent impl block, ordered as the convention lists the kinds.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum ImplItemCategory {
-    Const,
-    Fn,
-}
-
-/// The sort key of an item in an inherent impl block.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+/// The sort key of an item in an inherent impl block. The derived `Ord` compares the fields in
+/// declaration order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ImplKey {
     category: ImplItemCategory,
     group: VisibilityGroup,
@@ -163,15 +171,23 @@ impl SortKey for ImplKey {
     }
 }
 
+/// The kind of an item in an inherent impl block, ordered as the convention lists the kinds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum ImplItemCategory {
+    Const,
+    Fn,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     const BASE_KEY: ModuleKey = ModuleKey {
         group: VisibilityGroup::Pub,
-        category: Category::Type,
-        anchor: 1,
-        impl_rank: ImplRank::Type,
+        category: Category::Type {
+            anchor: 1,
+            impl_rank: ImplRank::Type,
+        },
     };
 
     #[test]
@@ -180,20 +196,23 @@ mod tests {
             ModuleKey {
                 group: VisibilityGroup::Private,
                 category: Category::Const,
-                ..BASE_KEY
             },
             ModuleKey {
                 category: Category::Fn,
-                anchor: 0,
                 ..BASE_KEY
             },
             ModuleKey {
-                anchor: 2,
-                impl_rank: ImplRank::Inherent,
+                category: Category::Type {
+                    anchor: 2,
+                    impl_rank: ImplRank::Inherent,
+                },
                 ..BASE_KEY
             },
             ModuleKey {
-                impl_rank: ImplRank::ExternalTrait,
+                category: Category::Type {
+                    anchor: 1,
+                    impl_rank: ImplRank::ExternalTrait,
+                },
                 ..BASE_KEY
             },
         ]
@@ -210,18 +229,18 @@ mod tests {
             ]
         );
 
-        let inherent = ModuleKey {
-            impl_rank: ImplRank::Inherent,
+        let [inherent, crate_trait, external_trait] = [
+            ImplRank::Inherent,
+            ImplRank::CrateTrait,
+            ImplRank::ExternalTrait,
+        ]
+        .map(|impl_rank| ModuleKey {
+            category: Category::Type {
+                anchor: 1,
+                impl_rank,
+            },
             ..BASE_KEY
-        };
-        let crate_trait = ModuleKey {
-            impl_rank: ImplRank::CrateTrait,
-            ..BASE_KEY
-        };
-        let external_trait = ModuleKey {
-            impl_rank: ImplRank::ExternalTrait,
-            ..BASE_KEY
-        };
+        });
         assert_eq!(
             [
                 ModuleKey::reason(inherent, crate_trait),

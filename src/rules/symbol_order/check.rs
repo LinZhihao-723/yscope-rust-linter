@@ -51,7 +51,7 @@ impl Checker {
             },
             diagnostics: Vec::new(),
         };
-        file_check.check_module(&syntax_tree.items);
+        file_check.record_module_diagnostics(&syntax_tree.items);
         file_check.diagnostics
     }
 }
@@ -69,7 +69,7 @@ struct FileCheck<'file> {
 impl FileCheck<'_> {
     /// Checks the module whose items are `items`, its inherent impl blocks and its inline modules,
     /// recursively, and records the findings.
-    fn check_module(&mut self, items: &[syn::Item]) {
+    fn record_module_diagnostics(&mut self, items: &[syn::Item]) {
         self.diagnostics.extend(scope_diagnostics(
             &self.entry_collector.module_entries(items),
         ));
@@ -79,7 +79,7 @@ impl FileCheck<'_> {
                     if !self.entry_collector.is_skipped(&item_mod.attrs, false) =>
                 {
                     if let Some((_, content)) = &item_mod.content {
-                        self.check_module(content);
+                        self.record_module_diagnostics(content);
                     }
                 }
                 syn::Item::Impl(item_impl)
@@ -100,21 +100,25 @@ impl FileCheck<'_> {
 ///
 /// # Type Parameters
 ///
-/// * `Key` - The type of the scope's sort keys.
+/// * `KeyType` - The type of the scope's sort keys.
 ///
 /// # Returns
 ///
 /// A diagnostic for each item outside the kept subsequence, at the item's first token after its
 /// attributes.
-fn scope_diagnostics<Key: SortKey>(entries: &[Entry<Key>]) -> Vec<Diagnostic> {
-    let keys: Vec<Key> = entries.iter().map(|entry| entry.key).collect();
+///
+/// # Panics
+///
+/// Panics if an item's span ends before an earlier item's span starts.
+fn scope_diagnostics<KeyType: SortKey>(entries: &[Entry<KeyType>]) -> Vec<Diagnostic> {
+    let keys: Vec<KeyType> = entries.iter().map(|entry| entry.key).collect();
     let is_kept = moves::kept(&keys);
     entries
         .iter()
         .enumerate()
         .filter(|&(index, _)| !is_kept[index])
-        .filter_map(|(index, flagged)| {
-            let placement = moves::place(&keys, &is_kept, index)?;
+        .map(|(index, flagged)| {
+            let placement = moves::place(&keys, &is_kept, index);
             let reference = &entries[placement.reference];
             let conflict = &entries[placement.conflict];
             let message = format!(
@@ -122,7 +126,7 @@ fn scope_diagnostics<Key: SortKey>(entries: &[Entry<Key>]) -> Vec<Diagnostic> {
                 flagged.description,
                 placement.direction.as_str(),
                 reference.description,
-                Key::reason(flagged.key.min(conflict.key), flagged.key.max(conflict.key)),
+                KeyType::reason(flagged.key.min(conflict.key), flagged.key.max(conflict.key)),
             );
             let (earlier, later) = if index < placement.reference {
                 (flagged, reference)
@@ -130,23 +134,21 @@ fn scope_diagnostics<Key: SortKey>(entries: &[Entry<Key>]) -> Vec<Diagnostic> {
                 (reference, flagged)
             };
             let anchor = LineSpan::new(earlier.lines.span.first(), later.lines.span.last())
-                .unwrap_or(flagged.lines.span);
-            Some(
-                Diagnostic::new(RuleId::SymbolOrder.into(), flagged.position, message)
-                    .with_anchor(anchor)
-                    .with_fn_header(flagged.lines.header),
-            )
+                .expect("a later item ends after an earlier item starts");
+            Diagnostic::new(RuleId::SymbolOrder.into(), flagged.position, message)
+                .with_anchor(anchor)
+                .with_fn_header(flagged.lines.header)
         })
         .collect()
 }
 
 #[cfg(test)]
 mod tests {
-    use std::cell::RefCell;
     use std::path::Path;
 
     use super::*;
     use crate::config::RuleSet;
+    use crate::syntax::test_code::TestModuleCache;
 
     const FIXTURE_PATH: &str = "nonexistent-fixture-directory/subject.rs";
 
@@ -161,7 +163,7 @@ mod tests {
     /// Panics if `source_text` doesn't parse.
     fn diagnostics(source_text: &str, include_tests: bool) -> Vec<Diagnostic> {
         syn::parse_file(source_text).expect("valid file");
-        let test_module_cache = RefCell::default();
+        let test_module_cache = TestModuleCache::default();
         let context = FileContext::new(Path::new(FIXTURE_PATH), source_text, &test_module_cache);
         let mut diagnostics = Checker::new(include_tests).check(&context);
         diagnostics.sort_by_key(Diagnostic::position);
@@ -604,7 +606,7 @@ mod tests {
             "pub fn c() {}\n",
             "pub fn d() {}\n",
         );
-        let test_module_cache = RefCell::default();
+        let test_module_cache = TestModuleCache::default();
         let context = FileContext::new(Path::new(FIXTURE_PATH), source_text, &test_module_cache);
         let rule_diagnostics = Checker::new(false).check(&context);
         assert_eq!(

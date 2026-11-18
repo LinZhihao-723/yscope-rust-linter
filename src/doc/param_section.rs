@@ -20,17 +20,14 @@ pub const PARAMETERS: ParamSectionKind = ParamSectionKind {
     parameter_noun: "parameter",
 };
 
-/// The separator between a bullet's name and its description in the canonical bullet form.
-pub const CANONICAL_SEPARATOR: &str = " - ";
-
 /// A kind of section that documents parameters one bullet each.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy)]
 pub struct ParamSectionKind {
     /// The section's header title, such as `Type Parameters`.
-    pub title: &'static str,
+    title: &'static str,
 
     /// What the section's bullets document, as diagnostics name it, such as `generic parameter`.
-    pub parameter_noun: &'static str,
+    parameter_noun: &'static str,
 }
 
 impl ParamSectionKind {
@@ -116,16 +113,16 @@ impl ParamSectionKind {
 }
 
 /// A section of a docstring whose top-level bullets each document one parameter.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct ParamSection {
     /// The position of the section's header.
     pub header: Position,
 
     /// The section's top-level bullets, in source order. Sub-bullets belong to their bullet.
-    pub bullets: Vec<ParamBullet>,
+    bullets: Vec<ParamBullet>,
 
     /// The positions of the later headers with the same title and level.
-    pub duplicate_headers: Vec<Position>,
+    duplicate_headers: Vec<Position>,
 }
 
 impl ParamSection {
@@ -156,12 +153,15 @@ impl ParamSection {
             .collect();
         let mut documented: Vec<(&str, usize)> = Vec::new();
         for bullet in &self.bullets {
-            let Some(name) = bullet.name.as_deref() else {
-                findings.push(ParamFinding {
-                    kind: ParamFindingKind::NamelessBullet,
-                    position: bullet.position,
-                });
-                continue;
+            let name = match &bullet.form {
+                BulletForm::Nameless => {
+                    findings.push(ParamFinding {
+                        kind: ParamFindingKind::NamelessBullet,
+                        position: bullet.position,
+                    });
+                    continue;
+                }
+                BulletForm::NonCanonical { name } | BulletForm::Canonical { name } => name.as_str(),
             };
             let kind = if !required.iter().chain(accepted).any(|known| known == name) {
                 Some(ParamFindingKind::UnknownName {
@@ -177,8 +177,10 @@ impl ParamSection {
                 })
             } else {
                 documented.push((name, bullet.position.line));
-                (!bullet.is_canonical).then(|| ParamFindingKind::NonCanonicalBullet {
-                    name: name.to_owned(),
+                matches!(bullet.form, BulletForm::NonCanonical { .. }).then(|| {
+                    ParamFindingKind::NonCanonicalBullet {
+                        name: name.to_owned(),
+                    }
                 })
             };
             findings.extend(kind.map(|kind| ParamFinding {
@@ -203,30 +205,15 @@ impl ParamSection {
     }
 }
 
-/// A top-level bullet of a [`ParamSection`].
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ParamBullet {
-    /// The name the bullet documents: the code of the code span or code link the bullet starts
-    /// with, such as `T`, `'a` or `job_id`. [`None`] if the bullet starts with neither.
-    pub name: Option<String>,
-
-    /// Whether the bullet has the canonical form ``* `name` - description``: a bare code span
-    /// followed by [`CANONICAL_SEPARATOR`] and a non-blank description.
-    pub is_canonical: bool,
-
-    /// The position of the bullet's first line.
-    pub position: Position,
-}
-
 /// A mismatch between a [`ParamSection`] and the parameters of its item.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug)]
 pub struct ParamFinding {
     pub kind: ParamFindingKind,
     pub position: Position,
 }
 
 /// The kinds of [`ParamFinding`].
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug)]
 pub enum ParamFindingKind {
     /// A second header with the section's title at the section's level.
     DuplicateHeader,
@@ -247,6 +234,33 @@ pub enum ParamFindingKind {
     Missing { name: String },
 }
 
+/// The separator between a bullet's name and its description in the canonical bullet form.
+const CANONICAL_SEPARATOR: &str = " - ";
+
+/// A top-level bullet of a [`ParamSection`].
+#[derive(Debug, PartialEq, Eq)]
+struct ParamBullet {
+    form: BulletForm,
+
+    /// The position of the bullet's first line.
+    position: Position,
+}
+
+/// The name a [`ParamBullet`] documents, and whether the bullet is in the canonical form: a bare
+/// code span with the name, then [`CANONICAL_SEPARATOR`], then a non-blank description.
+#[derive(Debug, PartialEq, Eq)]
+enum BulletForm {
+    /// The bullet starts with neither a code span nor a code link.
+    Nameless,
+
+    /// The bullet starts with a code span or a code link whose code is `name`, such as `T`, `'a` or
+    /// `job_id`, but isn't in the canonical form.
+    NonCanonical { name: String },
+
+    /// The bullet is in the canonical form, and its code span is `name`.
+    Canonical { name: String },
+}
+
 /// Parses the joined text of one top-level bullet at `position`.
 ///
 /// # Returns
@@ -259,20 +273,21 @@ fn parse_bullet(text: &str, position: Position, definitions: &LinkDefinitions) -
         .filter(|reference| reference.start == 0)
     else {
         return ParamBullet {
-            name: None,
-            is_canonical: false,
+            form: BulletForm::Nameless,
             position,
         };
     };
+    let name = first_reference.path_text;
     let is_canonical = first_reference.kind == ReferenceKind::BareCode
         && text[first_reference.end..]
             .strip_prefix(CANONICAL_SEPARATOR)
             .is_some_and(|description| !description.trim().is_empty());
-    ParamBullet {
-        name: Some(first_reference.path_text),
-        is_canonical,
-        position,
-    }
+    let form = if is_canonical {
+        BulletForm::Canonical { name }
+    } else {
+        BulletForm::NonCanonical { name }
+    };
+    ParamBullet { form, position }
 }
 
 /// # Returns
@@ -303,14 +318,25 @@ mod tests {
             .collect()
     }
 
-    fn bullets(text: &str, title: ParamSectionKind) -> Vec<(Option<String>, bool, usize)> {
-        title
-            .parse(&doc_lines(text))
+    fn bullets(text: &str, kind: ParamSectionKind) -> Vec<(BulletForm, usize)> {
+        kind.parse(&doc_lines(text))
             .expect("a section")
             .bullets
             .into_iter()
-            .map(|bullet| (bullet.name, bullet.is_canonical, bullet.position.line))
+            .map(|bullet| (bullet.form, bullet.position.line))
             .collect()
+    }
+
+    fn canonical(name: &str) -> BulletForm {
+        BulletForm::Canonical {
+            name: name.to_owned(),
+        }
+    }
+
+    fn non_canonical(name: &str) -> BulletForm {
+        BulletForm::NonCanonical {
+            name: name.to_owned(),
+        }
     }
 
     #[test]
@@ -321,9 +347,9 @@ mod tests {
         assert_eq!(
             bullets(text, TYPE_PARAMETERS),
             [
-                (Some("StorageType".to_owned()), true, 5),
-                (Some("'cache_lifetime".to_owned()), true, 6),
-                (Some("LIMIT".to_owned()), true, 8),
+                (canonical("StorageType"), 5),
+                (canonical("'cache_lifetime"), 6),
+                (canonical("LIMIT"), 8),
             ]
         );
         let section = TYPE_PARAMETERS.parse(&doc_lines(text)).expect("a section");
@@ -339,12 +365,12 @@ mod tests {
         assert_eq!(
             bullets(text, PARAMETERS),
             [
-                (Some("job_id".to_owned()), false, 3),
-                (Some("em_id".to_owned()), false, 4),
-                (Some("ip".to_owned()), false, 5),
-                (Some("session_id".to_owned()), false, 6),
-                (None, false, 7),
-                (None, false, 8),
+                (non_canonical("job_id"), 3),
+                (non_canonical("em_id"), 4),
+                (non_canonical("ip"), 5),
+                (non_canonical("session_id"), 6),
+                (BulletForm::Nameless, 7),
+                (BulletForm::Nameless, 8),
             ]
         );
     }
@@ -352,10 +378,7 @@ mod tests {
     #[test]
     fn description_may_continue_on_the_next_line() {
         let text = "# Parameters\n\n* `job_id` -\n  The owning job.";
-        assert_eq!(
-            bullets(text, PARAMETERS),
-            [(Some("job_id".to_owned()), true, 3)]
-        );
+        assert_eq!(bullets(text, PARAMETERS), [(canonical("job_id"), 3)]);
     }
 
     #[test]

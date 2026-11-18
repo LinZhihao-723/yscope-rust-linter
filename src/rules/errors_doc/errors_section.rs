@@ -146,6 +146,27 @@ struct Possessive {
     is_canonical: bool,
 }
 
+/// The word a forward bullet starts with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ForwardWord {
+    Forwards,
+
+    /// The singular form, which gets a format finding.
+    Forward,
+}
+
+impl ForwardWord {
+    /// # Returns
+    ///
+    /// The word as a bullet spells it.
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Forwards => "Forwards",
+            Self::Forward => "Forward",
+        }
+    }
+}
+
 /// Classifies one top-level bullet and adds it to `section`, in this order:
 ///
 /// 1. A bullet starting with `Forwards` or `Forward` whose references include one followed by `'s`
@@ -212,7 +233,7 @@ fn classify_into(bullet: &Bullet, definitions: &LinkDefinitions, section: &mut E
 /// segment is in upper camel case is a type, which gets a format finding.
 fn classify_forward_into(
     bullet: &Bullet,
-    forward_word: &str,
+    forward_word: ForwardWord,
     definitions: &LinkDefinitions,
     section: &mut ErrorsSection,
 ) {
@@ -230,7 +251,7 @@ fn classify_forward_into(
             })
         });
     let (kind, paths) = if let Some(possessive) = possessive {
-        if forward_word == "Forward" || !possessive.is_canonical {
+        if forward_word == ForwardWord::Forward || !possessive.is_canonical {
             section.format_findings.push(FormatFinding {
                 kind: FormatFindingKind::NonCanonicalForward,
                 position: bullet.position,
@@ -357,12 +378,15 @@ fn finish(
 
 /// # Returns
 ///
-/// `Forwards` or `Forward` if `text` starts with that word, or [`None`] otherwise.
-fn forward_word(text: &str) -> Option<&'static str> {
-    ["Forwards", "Forward"].into_iter().find(|word| {
-        text.strip_prefix(word)
-            .is_some_and(|rest| !rest.starts_with(|character: char| character.is_alphanumeric()))
-    })
+/// The forward word `text` starts with, or [`None`] if it starts with neither.
+fn forward_word(text: &str) -> Option<ForwardWord> {
+    [ForwardWord::Forwards, ForwardWord::Forward]
+        .into_iter()
+        .find(|word| {
+            text.strip_prefix(word.as_str()).is_some_and(|rest| {
+                !rest.starts_with(|character: char| character.is_alphanumeric())
+            })
+        })
 }
 
 /// # Returns
@@ -462,29 +486,6 @@ mod tests {
             .filter(|finding| finding.kind == FormatFindingKind::NonCanonicalIntro)
             .map(|finding| finding.position.line)
             .collect()
-    }
-
-    #[test]
-    fn smallest_level_errors_header_is_selected() {
-        let text = "Summary.\n\n# Returns\n\nA stream.\n\n## Errors\n\n* [`StreamError::A`] if \
-                    a.\n\n# Errors\n\n* [`Error::B`] if b.\n\n### Errors\n\n* [`Error::C`] if \
-                    c.\n\n# Panics\n\n* [`Error::D`] if d.";
-        let section = section(text);
-        assert_eq!(section.header.line, 11);
-        assert_eq!(variant_heads(&section), [["Error::B"], ["Error::C"]]);
-    }
-
-    #[test]
-    fn errors_header_under_a_smaller_level_header_is_not_the_fns_section() {
-        let text = "# Returns\n\n## Errors\n\n* [`StreamError::A`] if a.";
-        assert_eq!(parse(&doc_lines(text)), None);
-        assert_eq!(parse(&doc_lines("No headers.")), None);
-    }
-
-    #[test]
-    fn section_ends_at_a_smaller_level_header() {
-        let text = "## Errors\n\n* [`Error::A`] if a.\n\n# Panics\n\n* [`Error::B`] if b.";
-        assert_eq!(variant_heads(&section(text)), [["Error::A"]]);
     }
 
     #[test]

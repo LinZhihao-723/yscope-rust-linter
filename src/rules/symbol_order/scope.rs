@@ -2,8 +2,6 @@
 
 use std::collections::HashMap;
 
-use proc_macro2::Delimiter;
-use proc_macro2::TokenTree;
 use quote::ToTokens;
 
 use crate::diagnostic::Position;
@@ -14,7 +12,6 @@ use crate::rules::symbol_order::keys::ModuleKey;
 use crate::syntax::crate_names::CrateNames;
 use crate::syntax::item_lines;
 use crate::syntax::item_lines::ItemLines;
-use crate::syntax::span;
 use crate::syntax::test_code;
 use crate::syntax::types;
 use crate::syntax::visibility::VisibilityGroup;
@@ -23,10 +20,10 @@ use crate::syntax::visibility::VisibilityGroup;
 ///
 /// # Type Parameters
 ///
-/// * `Key` - The type of the scope's sort keys.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Entry<Key> {
-    pub key: Key,
+/// * `KeyType` - The type of the scope's sort keys.
+#[derive(Debug)]
+pub struct Entry<KeyType> {
+    pub key: KeyType,
 
     /// The item as diagnostics describe it, such as ``pub fn `load` `` or ``impl `State` ``.
     pub description: String,
@@ -42,7 +39,7 @@ pub struct Entry<Key> {
 /// # Type Parameters
 ///
 /// * `'file` - The lifetime of the file's crate-local names.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug)]
 pub struct EntryCollector<'file> {
     pub crate_names: &'file CrateNames,
 
@@ -112,9 +109,7 @@ impl EntryCollector<'_> {
     /// Whether an item with `attrs` is test code that isn't counted or checked: an item with
     /// `#[cfg(test)]`, or a fn with a `#[test]`-like attribute, unless tests are included.
     pub fn is_skipped(&self, attrs: &[syn::Attribute], is_fn: bool) -> bool {
-        !self.include_tests
-            && (test_code::has_cfg_test(attrs)
-                || (is_fn && attrs.iter().any(test_code::is_test_attribute)))
+        !self.include_tests && test_code::is_test_item(attrs, is_fn)
     }
 
     /// Finds the structs, enums and unions of a module that impl blocks can belong to.
@@ -162,6 +157,10 @@ impl EntryCollector<'_> {
         index: usize,
         types: &HashMap<String, Vec<TypeDefinition>>,
     ) -> Option<Entry<ModuleKey>> {
+        let type_category = Category::Type {
+            anchor: index,
+            impl_rank: ImplRank::Type,
+        };
         let (attrs, vis, category, noun, ident) = match item {
             syn::Item::Const(item_const) => (
                 &item_const.attrs,
@@ -180,42 +179,42 @@ impl EntryCollector<'_> {
             syn::Item::Struct(item_struct) => (
                 &item_struct.attrs,
                 &item_struct.vis,
-                Category::Type,
+                type_category,
                 "struct",
                 &item_struct.ident,
             ),
             syn::Item::Enum(item_enum) => (
                 &item_enum.attrs,
                 &item_enum.vis,
-                Category::Type,
+                type_category,
                 "enum",
                 &item_enum.ident,
             ),
             syn::Item::Union(item_union) => (
                 &item_union.attrs,
                 &item_union.vis,
-                Category::Type,
+                type_category,
                 "union",
                 &item_union.ident,
             ),
             syn::Item::Trait(item_trait) => (
                 &item_trait.attrs,
                 &item_trait.vis,
-                Category::Type,
+                type_category,
                 "trait",
                 &item_trait.ident,
             ),
             syn::Item::TraitAlias(item_trait_alias) => (
                 &item_trait_alias.attrs,
                 &item_trait_alias.vis,
-                Category::Type,
+                type_category,
                 "trait alias",
                 &item_trait_alias.ident,
             ),
             syn::Item::Type(item_type) => (
                 &item_type.attrs,
                 &item_type.vis,
-                Category::Type,
+                type_category,
                 "type",
                 &item_type.ident,
             ),
@@ -229,16 +228,11 @@ impl EntryCollector<'_> {
             syn::Item::Impl(item_impl) => return self.impl_block_entry(item_impl, index, types),
             _ => return None,
         };
-        if self.is_skipped(attrs, category == Category::Fn) {
+        if self.is_skipped(attrs, matches!(category, Category::Fn)) {
             return None;
         }
         let group = VisibilityGroup::of(vis);
-        let key = ModuleKey {
-            group,
-            category,
-            anchor: if category == Category::Type { index } else { 0 },
-            impl_rank: ImplRank::Type,
-        };
+        let key = ModuleKey { group, category };
         entry(item, key, describe(group, noun, ident))
     }
 
@@ -301,16 +295,17 @@ impl EntryCollector<'_> {
         };
         let key = ModuleKey {
             group: definition.group,
-            category: Category::Type,
-            anchor: definition.index,
-            impl_rank,
+            category: Category::Type {
+                anchor: definition.index,
+                impl_rank,
+            },
         };
         entry(item_impl, key, description)
     }
 }
 
 /// A struct, enum or union that impl blocks of its module can belong to.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug)]
 struct TypeDefinition {
     /// The index of the type in its module's items.
     index: usize,
@@ -322,16 +317,20 @@ struct TypeDefinition {
 ///
 /// # Type Parameters
 ///
-/// * `Key` - The type of the scope's sort keys.
+/// * `KeyType` - The type of the scope's sort keys.
 ///
 /// # Returns
 ///
 /// The entry, or [`None`] if `item` has no token after its outer attributes.
-fn entry<Key>(item: &impl ToTokens, key: Key, description: String) -> Option<Entry<Key>> {
+fn entry<KeyType>(
+    item: &impl ToTokens,
+    key: KeyType,
+    description: String,
+) -> Option<Entry<KeyType>> {
     Some(Entry {
         key,
         description,
-        position: own_start(item)?,
+        position: item_lines::own_start(item)?,
         lines: item_lines::of(item)?,
     })
 }
@@ -342,23 +341,4 @@ fn entry<Key>(item: &impl ToTokens, key: Key, description: String) -> Option<Ent
 /// `ident`, such as ``pub(crate) fn `load` ``.
 fn describe(group: VisibilityGroup, noun: &str, ident: &syn::Ident) -> String {
     format!("{} {noun} `{ident}`", group.as_str())
-}
-
-/// Finds the first token of `item` after its outer attributes, which are the leading `#` and `[..]`
-/// pairs of its tokens.
-///
-/// # Returns
-///
-/// The token's position, or [`None`] if `item` has no token after its attributes.
-fn own_start(item: &impl ToTokens) -> Option<Position> {
-    let token_trees: Vec<TokenTree> = item.to_token_stream().into_iter().collect();
-    let mut own_start = 0;
-    while let (Some(TokenTree::Punct(punct)), Some(TokenTree::Group(group))) =
-        (token_trees.get(own_start), token_trees.get(own_start + 1))
-        && punct.as_char() == '#'
-        && group.delimiter() == Delimiter::Bracket
-    {
-        own_start += 2;
-    }
-    Some(span::start_position(token_trees.get(own_start)?.span()))
 }
