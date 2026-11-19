@@ -1,5 +1,7 @@
 # `errors-doc`
 
+Code: `DOC002`, in the `DOC` set. See the [rule index](README.md) for the codes of all rules.
+
 The `# Errors` section of a fn's docstring must document every error the fn returns directly and
 every function whose errors it forwards. It must not document errors the fn never returns, or
 functions it never forwards.
@@ -28,7 +30,7 @@ fn load(path: &str) -> Result<Config, Error> {
 
 ```console
 $ yscope-rust-linter example.rs
-example.rs:14:5: errors-doc: `load` forwards errors from `parse`, but `# Errors` does not list it; add "* Forwards [`parse`]'s return values on failure."
+example.rs:14:5: DOC002 errors-doc: `load` forwards errors from `parse`, but `# Errors` does not list it; add "* Forwards [`parse`]'s return values on failure."
 ```
 
 The tail call `parse(&text)` returns `parse`'s errors, so the section needs a bullet for it:
@@ -107,7 +109,7 @@ trait Store {
 
 ```console
 $ yscope-rust-linter example.rs
-example.rs:15:5: errors-doc: this Forwards bullet names no function; write "* Forwards [`path::to::func`]'s return values on failure."
+example.rs:15:5: DOC002 errors-doc: this Forwards bullet names no function; write "* Forwards [`path::to::func`]'s return values on failure."
 ```
 
 These fns are not checked:
@@ -139,7 +141,7 @@ fn checks() -> Result<(), Error> {
 
 ```console
 $ yscope-rust-linter --include-tests example.rs
-example.rs:7:1: errors-doc: "Forwards [`load`]" names a function whose errors `checks` never forwards
+example.rs:7:1: DOC002 errors-doc: "Forwards [`load`]" names a function whose errors `checks` never forwards
 ```
 
 The rule needs the file's syntax tree. A file that `syn` can't parse gets a `parse-error`
@@ -149,7 +151,7 @@ first line says why. Each of these diagnostics is reported once per file, and na
 rule it affects:
 
 ```text
-src/store/tests.rs:1:1: parse-error: can't tell whether this file is a `#[cfg(test)]` module: syn failed to parse `src/store/mod.rs` (cannot parse string into token stream); errors-doc, symbol-order, trait-params-doc, type-params-doc check it as non-test code
+src/store/tests.rs:1:1: LNT001 parse-error: can't tell whether this file is a `#[cfg(test)]` module: syn failed to parse `src/store/mod.rs` (cannot parse string into token stream); errors-doc, symbol-order, trait-params-doc, type-params-doc check it as non-test code
 ```
 
 ## The section format
@@ -229,7 +231,7 @@ fn compress(buffer: &[u8]) -> Result<Vec<u8>, Error> {
 
 ```console
 $ yscope-rust-linter example.rs
-example.rs:5:1: errors-doc: start the `# Errors` section with "Returns an error if:" followed by one bullet per error
+example.rs:5:1: DOC002 errors-doc: start the `# Errors` section with "Returns an error if:" followed by one bullet per error
 ```
 
 There is one exception. A section without bullets is accepted in a fn whose body has no error source
@@ -424,9 +426,9 @@ fn find(&self, name: &str, id: u64) -> Result<User, Error> {
 
 ```console
 $ yscope-rust-linter example.rs
-example.rs:12:35: errors-doc: `find` returns [`Error::NotCached`] directly, but `# Errors` has no bullet for it; add "* [`Error::NotCached`] if ..."
-example.rs:13:34: errors-doc: `find` returns [`Error::UnknownUser`] directly, but `# Errors` has no bullet for it; add "* [`Error::UnknownUser`] if ..."
-example.rs:15:9: errors-doc: `find` returns [`Error::Banned`] directly, but `# Errors` has no bullet for it; add "* [`Error::Banned`] if ..."
+example.rs:12:35: DOC002 errors-doc: `find` returns [`Error::NotCached`] directly, but `# Errors` has no bullet for it; add "* [`Error::NotCached`] if ..."
+example.rs:13:34: DOC002 errors-doc: `find` returns [`Error::UnknownUser`] directly, but `# Errors` has no bullet for it; add "* [`Error::UnknownUser`] if ..."
+example.rs:15:9: DOC002 errors-doc: `find` returns [`Error::Banned`] directly, but `# Errors` has no bullet for it; add "* [`Error::Banned`] if ..."
 ```
 
 ```rust
@@ -470,8 +472,8 @@ fn load_state(db: &Db) -> Result<State, Error> {
 
 ```console
 $ yscope-rust-linter example.rs
-example.rs:7:1: errors-doc: [`Error::Corrupted`] is documented, but `load_state` never returns it directly; if a callee returns it, write "* Forwards [`callee`]'s return values on failure." instead, or remove the bullet
-example.rs:10:16: errors-doc: `load_state` returns [`DbError::Corrupted`] directly, but `# Errors` has no bullet for it; add "* [`DbError::Corrupted`] if ..."
+example.rs:7:1: DOC002 errors-doc: [`Error::Corrupted`] is documented, but `load_state` never returns it directly; if a callee returns it, write "* Forwards [`callee`]'s return values on failure." instead, or remove the bullet
+example.rs:10:16: DOC002 errors-doc: `load_state` returns [`DbError::Corrupted`] directly, but `# Errors` has no bullet for it; add "* [`DbError::Corrupted`] if ..."
 ```
 
 A head that names both types documents it:
@@ -543,7 +545,7 @@ fn send(channel: &Channel, message: &str) -> Result<(), Error> {
 
 ```console
 $ yscope-rust-linter example.rs
-example.rs:14:16: errors-doc: `send` returns [`Error::Transport`] directly, but `# Errors` has no bullet for it; add "* [`Error::Transport`] if ..."
+example.rs:14:16: DOC002 errors-doc: `send` returns [`Error::Transport`] directly, but `# Errors` has no bullet for it; add "* [`Error::Transport`] if ..."
 ```
 
 The fix here is a variant bullet, `` * [`Error::Transport`] if the channel is closed. ``.
@@ -577,7 +579,7 @@ fn send(channel: &Channel, message: &str) -> Result<(), Error> {
 
 ```console
 $ yscope-rust-linter example.rs
-example.rs:14:16: errors-doc: `send` returns the [`Error`] that `transport_error` builds, but `# Errors` has no bullet for it; add a bullet for the variant `transport_error` builds, or "* [`Error`] if ..."
+example.rs:14:16: DOC002 errors-doc: `send` returns the [`Error`] that `transport_error` builds, but `# Errors` has no bullet for it; add a bullet for the variant `transport_error` builds, or "* [`Error`] if ..."
 ```
 
 ## Forwarded errors
@@ -626,12 +628,12 @@ fn run(&self, job: Job) -> Result<(), Error> {
 
 ```console
 $ yscope-rust-linter example.rs
-example.rs:10:45: errors-doc: `run` forwards errors from `plan`, but `# Errors` does not list it; add "* Forwards [`plan`]'s return values on failure."
-example.rs:12:21: errors-doc: `run` forwards errors from `skip`, but `# Errors` does not list it; add "* Forwards [`skip`]'s return values on failure."
-example.rs:15:11: errors-doc: `run` forwards errors from `execute`, but `# Errors` does not list it; add "* Forwards [`execute`]'s return values on failure."
-example.rs:16:16: errors-doc: `run` forwards errors from `start`, but `# Errors` does not list it; add "* Forwards [`start`]'s return values on failure."
-example.rs:20:76: errors-doc: `run` forwards errors from `parse_id`, but `# Errors` does not list it; add "* Forwards [`parse_id`]'s return values on failure."
-example.rs:21:10: errors-doc: `run` forwards errors from `finish`, but `# Errors` does not list it; add "* Forwards [`finish`]'s return values on failure."
+example.rs:10:45: DOC002 errors-doc: `run` forwards errors from `plan`, but `# Errors` does not list it; add "* Forwards [`plan`]'s return values on failure."
+example.rs:12:21: DOC002 errors-doc: `run` forwards errors from `skip`, but `# Errors` does not list it; add "* Forwards [`skip`]'s return values on failure."
+example.rs:15:11: DOC002 errors-doc: `run` forwards errors from `execute`, but `# Errors` does not list it; add "* Forwards [`execute`]'s return values on failure."
+example.rs:16:16: DOC002 errors-doc: `run` forwards errors from `start`, but `# Errors` does not list it; add "* Forwards [`start`]'s return values on failure."
+example.rs:20:76: DOC002 errors-doc: `run` forwards errors from `parse_id`, but `# Errors` does not list it; add "* Forwards [`parse_id`]'s return values on failure."
+example.rs:21:10: DOC002 errors-doc: `run` forwards errors from `finish`, but `# Errors` does not list it; add "* Forwards [`finish`]'s return values on failure."
 ```
 
 ### Mapped errors
@@ -665,9 +667,9 @@ fn run(&self, job: Job) -> Result<(), Error> {
 
 ```console
 $ yscope-rust-linter example.rs
-example.rs:9:50: errors-doc: `run` maps errors from `serialize` into [`Error::Serialization`], but `# Errors` documents neither; add "* Forwards [`serialize`]'s return values on failure." or "* [`Error::Serialization`] if ..."
-example.rs:10:74: errors-doc: `run` maps errors from `compress` into [`Error::Compression`], but `# Errors` documents neither; add "* Forwards [`compress`]'s return values on failure." or "* [`Error::Compression`] if ..."
-example.rs:11:34: errors-doc: `run` maps errors from `send` with `to_status`, but `# Errors` documents neither; add "* Forwards [`send`]'s return values on failure." or a variant bullet
+example.rs:9:50: DOC002 errors-doc: `run` maps errors from `serialize` into [`Error::Serialization`], but `# Errors` documents neither; add "* Forwards [`serialize`]'s return values on failure." or "* [`Error::Serialization`] if ..."
+example.rs:10:74: DOC002 errors-doc: `run` maps errors from `compress` into [`Error::Compression`], but `# Errors` documents neither; add "* Forwards [`compress`]'s return values on failure." or "* [`Error::Compression`] if ..."
+example.rs:11:34: DOC002 errors-doc: `run` maps errors from `send` with `to_status`, but `# Errors` documents neither; add "* Forwards [`send`]'s return values on failure." or a variant bullet
 ```
 
 This section documents each of them, in one of the accepted ways:
@@ -740,7 +742,7 @@ fn run(&self, job: Job) -> Result<(), Error> {
 
 ```console
 $ yscope-rust-linter example.rs
-example.rs:10:5: errors-doc: `run` forwards errors from `retry`, whose closures return [`Error::Closed`], but `# Errors` documents neither; add "* Forwards [`retry`]'s return values on failure." or a variant bullet for each closure error
+example.rs:10:5: DOC002 errors-doc: `run` forwards errors from `retry`, whose closures return [`Error::Closed`], but `# Errors` documents neither; add "* Forwards [`retry`]'s return values on failure." or a variant bullet for each closure error
 ```
 
 A call that gets a closure or a fn path is also documented by a Forwards bullet for the function the
@@ -813,7 +815,7 @@ fn insert_row(row: Row) -> Result<(), Error> {
 
 ```console
 $ yscope-rust-linter example.rs
-example.rs:19:11: errors-doc: `insert_row` forwards errors from `insert`, but `# Errors` does not list it; add "* Forwards [`insert`]'s return values on failure."
+example.rs:19:11: DOC002 errors-doc: `insert_row` forwards errors from `insert`, but `# Errors` does not list it; add "* Forwards [`insert`]'s return values on failure."
 ```
 
 ### Recursion
@@ -860,8 +862,8 @@ fn run(&self, job: Job) -> Result<(), Error> {
 
 ```console
 $ yscope-rust-linter example.rs
-example.rs:7:1: errors-doc: "Forwards [`Cache::load`]" names a function whose errors `run` never forwards
-example.rs:9:26: errors-doc: `run` forwards errors from `Storage::load`, but `# Errors` does not list it; add "* Forwards [`Storage::load`]'s return values on failure."
+example.rs:7:1: DOC002 errors-doc: "Forwards [`Cache::load`]" names a function whose errors `run` never forwards
+example.rs:9:26: DOC002 errors-doc: `run` forwards errors from `Storage::load`, but `# Errors` does not list it; add "* Forwards [`Storage::load`]'s return values on failure."
 ```
 
 When no exact match exists, a second pass also accepts different qualifiers that the file links:
@@ -905,8 +907,8 @@ fn count(&self, id: u64) -> Result<i64, Error> {
 
 ```console
 $ yscope-rust-linter example.rs
-example.rs:7:1: errors-doc: "Forwards [`sqlx::query::Query::fetch_one`]" names a function whose errors `count` never forwards
-example.rs:9:77: errors-doc: `count` forwards errors from `QueryScalar::fetch_one`, but `# Errors` does not list it; add "* Forwards [`QueryScalar::fetch_one`]'s return values on failure."
+example.rs:7:1: DOC002 errors-doc: "Forwards [`sqlx::query::Query::fetch_one`]" names a function whose errors `count` never forwards
+example.rs:9:77: DOC002 errors-doc: `count` forwards errors from `QueryScalar::fetch_one`, but `# Errors` does not list it; add "* Forwards [`QueryScalar::fetch_one`]'s return values on failure."
 ```
 
 The fix is ``Forwards [`sqlx::query::QueryScalar::fetch_one`]'s return values on failure.``
@@ -938,7 +940,7 @@ fn insert(&self, job: Job) -> Result<(), Error> {
 
 ```console
 $ yscope-rust-linter example.rs
-example.rs:7:1: errors-doc: [`Error::Conflict`] is documented, but `insert` never returns it directly; if a callee returns it, write "* Forwards [`callee`]'s return values on failure." instead, or remove the bullet
+example.rs:7:1: DOC002 errors-doc: [`Error::Conflict`] is documented, but `insert` never returns it directly; if a callee returns it, write "* Forwards [`callee`]'s return values on failure." instead, or remove the bullet
 ```
 
 A variant bullet is never stale in these cases:
@@ -980,7 +982,7 @@ fn run(&self, job: Job) -> Result<(), Error> {
 
 ```console
 $ yscope-rust-linter example.rs
-example.rs:7:1: errors-doc: "Forwards [`plan_events`]" names a function whose errors `run` never forwards
+example.rs:7:1: DOC002 errors-doc: "Forwards [`plan_events`]" names a function whose errors `run` never forwards
 ```
 
 A Forwards bullet is kept in these cases:
@@ -1016,7 +1018,7 @@ fn submit(&self, job: Job) -> Result<(), Error> {
 
 ```console
 $ yscope-rust-linter example.rs
-example.rs:3:1: errors-doc: `submit` lists 2 variants it never returns directly, and forwards `submit_job` without listing it; replace them with "* Forwards [`submit_job`]'s return values on failure."
+example.rs:3:1: DOC002 errors-doc: `submit` lists 2 variants it never returns directly, and forwards `submit_job` without listing it; replace them with "* Forwards [`submit_job`]'s return values on failure."
 ```
 
 ## Diagnostics
@@ -1067,7 +1069,7 @@ fn insert_row(row: Row) -> Result<(), Error> {
 
 ```console
 $ yscope-rust-linter example.rs
-example.rs:16:5: errors-doc: `insert_row` maps errors from `insert` into [`Error::Timeout`] and [`Error::PayloadRejected`], but `# Errors` documents only [`Error::PayloadRejected`]; add "* Forwards [`insert`]'s return values on failure." or a variant bullet for [`Error::Timeout`]
+example.rs:16:5: DOC002 errors-doc: `insert_row` maps errors from `insert` into [`Error::Timeout`] and [`Error::PayloadRejected`], but `# Errors` documents only [`Error::PayloadRejected`]; add "* Forwards [`insert`]'s return values on failure." or a variant bullet for [`Error::Timeout`]
 ```
 
 ### Stale documentation
@@ -1111,11 +1113,11 @@ fn submit(request: Request) -> Result<(), Error> {
 
 ```console
 $ yscope-rust-linter example.rs
-example.rs:7:1: errors-doc: write "Forwards [`func`]'s return values on failure."
-example.rs:8:1: errors-doc: write "Forwards [`func`]'s return values on failure."
-example.rs:9:1: errors-doc: write "Forwards [`func`]'s return values on failure."
-example.rs:10:1: errors-doc: this Forwards bullet names no function; write "* Forwards [`path::to::func`]'s return values on failure."
-example.rs:11:1: errors-doc: "Forwards [`tokio::task::JoinHandle`]" names a type, not a function; name the function whose errors are forwarded, or write "* [`tokio::task::JoinHandle`] if ..." for an error the fn returns
+example.rs:7:1: DOC002 errors-doc: write "Forwards [`func`]'s return values on failure."
+example.rs:8:1: DOC002 errors-doc: write "Forwards [`func`]'s return values on failure."
+example.rs:9:1: DOC002 errors-doc: write "Forwards [`func`]'s return values on failure."
+example.rs:10:1: DOC002 errors-doc: this Forwards bullet names no function; write "* Forwards [`path::to::func`]'s return values on failure."
+example.rs:11:1: DOC002 errors-doc: "Forwards [`tokio::task::JoinHandle`]" names a type, not a function; name the function whose errors are forwarded, or write "* [`tokio::task::JoinHandle`] if ..." for an error the fn returns
 ```
 
 ```rust
@@ -1133,7 +1135,7 @@ fn decode_frame(decode: impl FnOnce() -> Result<(), Error>) -> Result<(), Error>
 
 ```console
 $ yscope-rust-linter example.rs
-example.rs:7:1: errors-doc: this Forwards bullet names no function; write "* Forwards `decode`'s return values on failure."
+example.rs:7:1: DOC002 errors-doc: this Forwards bullet names no function; write "* Forwards `decode`'s return values on failure."
 ```
 
 ```rust
@@ -1159,8 +1161,8 @@ fn load(path: &str) -> Result<String, Error> {
 
 ```console
 $ yscope-rust-linter example.rs
-example.rs:9:1: errors-doc: the docstring has a second `# Errors` section at the same level; merge them
-example.rs:15:16: errors-doc: `load` returns [`Error::Empty`] directly, but `# Errors` has no bullet for it; add "* [`Error::Empty`] if ..."
+example.rs:9:1: DOC002 errors-doc: the docstring has a second `# Errors` section at the same level; merge them
+example.rs:15:16: DOC002 errors-doc: `load` returns [`Error::Empty`] directly, but `# Errors` has no bullet for it; add "* [`Error::Empty`] if ..."
 ```
 
 ### Other diagnostics

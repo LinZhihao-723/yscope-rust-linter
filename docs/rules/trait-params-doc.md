@@ -1,5 +1,7 @@
 # `trait-params-doc`
 
+Code: `DOC004`, in the `DOC` set. See the [rule index](README.md) for the codes of all rules.
+
 A documented method declaration in a `trait` block must have a `# Parameters` section with one
 bullet for each of its parameters. No other item may have a `# Parameters` section: the parameters
 of regular fns, inherent methods and trait impl methods are self-documenting.
@@ -28,8 +30,8 @@ impl JobStore for MemoryStore {
 
 ```console
 $ yscope-rust-linter example.rs
-example.rs:5:5: trait-params-doc: `# Parameters` doesn't document `inputs`; add "* `inputs` - ..."
-example.rs:14:5: trait-params-doc: `# Parameters` belongs only in trait method declarations; remove it from trait impl method `submit`
+example.rs:5:5: DOC004 trait-params-doc: `# Parameters` doesn't document `inputs`; add "* `inputs` - ..."
+example.rs:14:5: DOC004 trait-params-doc: `# Parameters` belongs only in trait method declarations; remove it from trait impl method `submit`
 ```
 
 The declaration documents every parameter, and the impl doesn't repeat them:
@@ -79,7 +81,7 @@ fn start(runner: &Runner) {}
 
 ```console
 $ yscope-rust-linter example.rs
-example.rs:3:1: trait-params-doc: `# Parameters` belongs only in trait method declarations; remove it from fn `start`
+example.rs:3:1: DOC004 trait-params-doc: `# Parameters` belongs only in trait method declarations; remove it from fn `start`
 ```
 
 These are not checked:
@@ -123,8 +125,8 @@ trait Canvas {
 
 ```console
 $ yscope-rust-linter example.rs
-example.rs:3:5: trait-params-doc: trait method `draw` has parameters but no `# Parameters` section; add one with a bullet for each of `_layer`
-example.rs:8:5: trait-params-doc: trait method `clear` has no parameters; remove the `# Parameters` section
+example.rs:3:5: DOC004 trait-params-doc: trait method `draw` has parameters but no `# Parameters` section; add one with a bullet for each of `_layer`
+example.rs:8:5: DOC004 trait-params-doc: trait method `clear` has no parameters; remove the `# Parameters` section
 ```
 
 ## The section format
@@ -170,12 +172,12 @@ trait JobStore {
 
 ```console
 $ yscope-rust-linter example.rs
-example.rs:5:5: trait-params-doc: `# Parameters` doesn't document `reason`; add "* `reason` - ..."
-example.rs:7:5: trait-params-doc: write this `# Parameters` bullet as "* `job_id` - description"
-example.rs:8:5: trait-params-doc: `job_id` is already documented on line 7; remove this bullet
-example.rs:9:5: trait-params-doc: this `# Parameters` bullet doesn't start with the parameter it documents; write "* `name` - description"
-example.rs:10:5: trait-params-doc: `# Parameters` documents `force`, which isn't a parameter of trait method `cancel`; remove the bullet
-example.rs:12:5: trait-params-doc: the docstring has a second `# Parameters` section at the same level; merge them
+example.rs:5:5: DOC004 trait-params-doc: `# Parameters` doesn't document `reason`; add "* `reason` - ..."
+example.rs:7:5: DOC004 trait-params-doc: write this `# Parameters` bullet as "* `job_id` - description"
+example.rs:8:5: DOC004 trait-params-doc: `job_id` is already documented on line 7; remove this bullet
+example.rs:9:5: DOC004 trait-params-doc: this `# Parameters` bullet doesn't start with the parameter it documents; write "* `name` - description"
+example.rs:10:5: DOC004 trait-params-doc: `# Parameters` documents `force`, which isn't a parameter of trait method `cancel`; remove the bullet
+example.rs:12:5: DOC004 trait-params-doc: the docstring has a second `# Parameters` section at the same level; merge them
 ```
 
 ## Diagnostics

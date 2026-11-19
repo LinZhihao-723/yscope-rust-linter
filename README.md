@@ -15,13 +15,18 @@ lines a pull request changes.
 
 ## Rules
 
-| Rule ID | What it checks |
-| ------- | -------------- |
-| [`comment-greedy-wrap`](docs/rules/comment-greedy-wrap.md) | Every `//`, `///` and `//!` comment paragraph is filled greedily to the width (100 columns by default). |
-| [`errors-doc`](docs/rules/errors-doc.md) | The `# Errors` section of a fn's docstring documents every error the fn returns directly and every function whose errors it forwards, and nothing it doesn't. |
-| [`symbol-order`](docs/rules/symbol-order.md) | The items of each module are grouped by visibility (`pub` first, private last), and within a group ordered consts, statics, types, then fns, with each type directly followed by its impl blocks. Inside an inherent impl, associated consts come before fns, and `pub` fns before private ones. |
-| [`trait-params-doc`](docs/rules/trait-params-doc.md) | A documented trait method declaration has a `# Parameters` section with one bullet per parameter, and no other item has a `# Parameters` section. |
-| [`type-params-doc`](docs/rules/type-params-doc.md) | A documented item with generic parameters has a `# Type Parameters` section with one bullet per type, lifetime and const parameter, and nothing else. |
+| Code | Name | What it checks |
+| ---- | ---- | -------------- |
+| `DOC001` | [`comment-greedy-wrap`](docs/rules/comment-greedy-wrap.md) | Every `//`, `///` and `//!` comment paragraph is filled greedily to the width (100 columns by default). |
+| `DOC002` | [`errors-doc`](docs/rules/errors-doc.md) | The `# Errors` section of a fn's docstring documents every error the fn returns directly and every function whose errors it forwards, and nothing it doesn't. |
+| `DOC003` | [`type-params-doc`](docs/rules/type-params-doc.md) | A documented item with generic parameters has a `# Type Parameters` section with one bullet per type, lifetime and const parameter, and nothing else. |
+| `DOC004` | [`trait-params-doc`](docs/rules/trait-params-doc.md) | A documented trait method declaration has a `# Parameters` section with one bullet per parameter, and no other item has a `# Parameters` section. |
+| `ORG001` | [`symbol-order`](docs/rules/symbol-order.md) | The items of each module are grouped by visibility (`pub` first, private last), and within a group ordered consts, statics, types, then fns, with each type directly followed by its impl blocks. Inside an inherent impl, associated consts come before fns, and `pub` fns before private ones. |
+
+Each rule has a stable code: a set prefix, `DOC` for comments and docstrings or `ORG` for code
+organization, and a number. A code is never renumbered or reused, and a removed rule is deprecated
+instead. See the [rule index](docs/rules/README.md) for the naming standard and the deprecation
+policy.
 
 A rule can be silenced for a line, a comment block, an item, a region or a file with a suppression
 comment that gives a reason. See [Suppression comments](docs/suppression.md).
@@ -43,7 +48,7 @@ yscope-rust-linter [OPTIONS] [TARGET]...
 | Argument             | Meaning                                                                                  |
 | -------------------- | ---------------------------------------------------------------------------------------- |
 | `TARGET`             | A file, a directory, or `FILE:RANGES` (for example `src/a.rs:10-20,30,40-45`).           |
-| `--rule <ID>`        | Enable only this rule. Repeatable. By default, every rule runs.                          |
+| `--rule <ID>`        | Enable only this rule, code (`DOC003`) or set (`DOC`). Repeatable. Default: every rule.  |
 | `--width <N>`        | The fill width for `comment-greedy-wrap`. Default: 100.                                  |
 | `--include-tests`    | Also check `#[test]` fns and `#[cfg(test)]` items in the rules that skip them.           |
 | `--exclude <PATH>`   | Skip this file or directory, matched as a path prefix by whole components. Repeatable.   |
@@ -52,20 +57,33 @@ yscope-rust-linter [OPTIONS] [TARGET]...
 
 * Directories are walked recursively for `.rs` files, skipping `target/` and hidden directories.
 * A file named explicitly is always checked.
+* `--rule` matches case-sensitively: names are lowercase, and codes and sets uppercase. A set names
+  every rule of the set that isn't deprecated. A deprecated rule named by name or code is skipped
+  with a warning on stderr. See [Selecting rules by name, code or
+  set](docs/rules/README.md#selecting-rules-by-name-code-or-set).
 * A file with a plain `//` comment holding the word `@generated` in its first five lines is skipped.
   The summary on stderr counts it separately.
 
 Each diagnostic is one line on stdout, sorted by path, line and column:
 
 ```text
-<path>:<line>:<column>: <code>: <message>
+<path>:<line>:<column>: <code> <name>: <message>
 ```
 
-Besides the rule IDs, these meta codes are always on and can't be suppressed:
+For example:
 
-* `invalid-suppression`: a malformed or misplaced suppression comment.
-* `unused-suppression`: a suppression comment that covered no finding.
-* `parse-error`: a file that can't be lexed, or that `syn` can't parse.
+```text
+src/cache.rs:12:1: DOC003 type-params-doc: struct `Cache` has generic parameters but no `# Type Parameters` section; add one with a bullet for each of `Value`
+```
+
+With `--format github`, the title of each annotation is `<code> <name>` too.
+
+Besides the rules, these meta codes are always on and can't be selected or suppressed:
+
+* `LNT001 parse-error`: a file that can't be lexed, or that `syn` can't parse.
+* `LNT002 invalid-suppression`: a malformed or misplaced suppression comment.
+* `LNT003 unused-suppression`: a suppression comment that covered no finding, or that names a
+  deprecated rule.
 
 Exit codes:
 

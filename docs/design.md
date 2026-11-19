@@ -5,6 +5,8 @@ modules, and the models behind its rules. What the tool checks and how to use it
 users elsewhere:
 
 * [`README.md`](../README.md): installation, the command line, output and exit codes, and CI use.
+* [`docs/rules/README.md`](rules/README.md): the rule index, with the codes, the naming standard and
+  the deprecation policy.
 * [`docs/rules/comment-greedy-wrap.md`](rules/comment-greedy-wrap.md): the comment rule, with its
   exemptions.
 * [`docs/rules/errors-doc.md`](rules/errors-doc.md): the `# Errors` rule, with the accepted
@@ -27,7 +29,9 @@ specification.
 * [Pipeline](#pipeline)
 * [FileContext](#filecontext)
 * [Rule registry](#rule-registry)
+  * [Codes and selectors](#codes-and-selectors)
   * [Adding a rule](#adding-a-rule)
+  * [Deprecating a rule](#deprecating-a-rule)
 * [Comment lexer](#comment-lexer)
 * [Markdown classifier](#markdown-classifier)
   * [Block starts](#block-starts)
@@ -141,7 +145,9 @@ Rule-agnostic helpers:
 
 Rules:
 
-* `src/rules/registry.rs`: `RuleId` and the `Rule` enum that dispatches a file to each enabled rule.
+* `src/rules/registry.rs`: `RuleId` with each rule's name, code and deprecation state, `Code` and
+  `CodeSet`, the `RuleSelector` that `--rule` and suppressions parse, and the `Rule` enum that
+  dispatches a file to each enabled rule.
 * `src/rules/greedy_wrap/`: `line_kind.rs` classifies lines, `paragraph.rs` splits blocks and runs
   the paragraph machine, `rustfmt_lists.rs` finds the lines that rustfmt wraps one column early, and
   `check.rs` holds the `Checker` with the fit test.
@@ -257,9 +263,9 @@ step 3 of the [pipeline](#pipeline) describes.
 
 Every rule is reached through `src/rules/registry.rs`:
 
-* `RuleId` names a rule for `--rule`, suppressions and diagnostic codes. `RuleId::ALL` lists the
-  rules in run order, and `RuleId::as_str` gives each its kebab-case name. `FromStr` and
-  `clap::ValueEnum` are derived from these two.
+* `RuleId` names a rule. `RuleId::ALL` lists the rules in run order, `RuleId::name` gives each its
+  kebab-case name, `RuleId::code` its stable `Code`, and `RuleId::is_deprecated` its deprecation
+  state. These matches are the single source of truth for the rules' metadata.
 * `Rule` holds an enabled rule's checker, with its settings and the state it keeps across the files
   of a run. `Rule::new` builds it from the `LintConfig`, and `Rule::check` dispatches a
   `FileContext` to it.
@@ -269,24 +275,72 @@ module](#out-of-line-test-modules) verdicts is shared by every rule, so `FileChe
 lends it to each file's `FileContext`. `TestModuleCache` keeps its interior mutability private. The
 `comment-greedy-wrap` checker holds the width, and the other checkers hold `include_tests`.
 
+### Codes and selectors
+
+The naming standard and the deprecation policy are user-facing, in
+[`docs/rules/README.md`](rules/README.md). In the code:
+
+* `Code` is a `CodeSet` and a number, and displays as `DOC003`. `CodeSet` is `Doc`, `Org` or `Lnt`,
+  with its three-letter prefix.
+* `DiagnosticCode::code` gives the code of every diagnostic. A rule's code comes from
+  `RuleId::code`, and the meta codes `LNT001` to `LNT003` from `DiagnosticCode` itself.
+* `RuleSelector` is what `--rule` and a suppression name: `Rule(RuleId)`, matched by name or by
+  code, or `Set(CodeSet)`, matched by prefix. `RuleSelector::rule_ids` expands a set to its rules
+  that aren't deprecated. `FromStr` is case-sensitive, and rejects a meta code, by name, by code or
+  as `LNT`, with `InvalidRuleSelector::MetaCode`. Any other miss is `InvalidRuleSelector::Unknown`,
+  whose message suggests the uppercase spelling when that one parses.
+* `clap` parses `--rule` through `RuleSelector::from_str`, so an invalid value is a usage error.
+
+The deprecation state is enforced in three places:
+
+* `RuleSet` drops deprecated rules when it is built, so `FileChecker` never builds or runs one.
+* `Cli::warnings` returns one warning per deprecated rule that `--rule` names, which `main` prints
+  to stderr before the run.
+* `Directive::parse` splits the rules a suppression names into the active and the deprecated ones.
+  Only the active ones get a `Suppression`, and `suppression::parse` reports each deprecated one as
+  an `unused-suppression`, as [Suppression internals](#suppression-internals) describes.
+
+No rule is deprecated today, so tests mark one with `RuleId::with_deprecated`. It exists only in the
+test build: it sets a thread-local that the test build's `RuleId::is_deprecated` also reads. Each
+test runs on its own thread, so the mark can't leak into other tests.
+
 ### Adding a rule
 
-1. Add a `RuleId` variant, add it to `RuleId::ALL`, and give it its name in `RuleId::as_str`.
-   `--rule`, suppression parsing and the unknown-rule message pick it up from there.
-2. Add the rule's module under `src/rules/`. Its `Checker` holds the rule's settings and cross-file
+1. Pick the set: `DOC` for a rule about comments and docstrings, `ORG` for one about code
+   organization. A rule that fits neither needs a new `CodeSet`, which is a decision for the
+   maintainers.
+2. Take the next free number in the set: one more than the highest code in it, deprecated rules
+   included. Never reuse a number.
+3. Add a `RuleId` variant, add it to `RuleId::ALL`, and give it its name in `RuleId::name`, its code
+   in `RuleId::code`, and `false` in `RuleId::is_registered_as_deprecated`. `--rule`, suppression
+   parsing, set selectors and the unknown-rule message pick it up from there.
+4. Add the rule's module under `src/rules/`. Its `Checker` holds the rule's settings and cross-file
    state, and its `check` takes the `FileContext` and returns the rule's diagnostics.
-3. Add a `Rule` variant that holds the checker, with its arms in `Rule::new` and `Rule::check`.
-4. Give each diagnostic an anchor span that covers every line whose change can create the finding,
+5. Add a `Rule` variant that holds the checker, with its arms in `Rule::new` and `Rule::check`.
+6. Give each diagnostic an anchor span that covers every line whose change can create the finding,
    so that the [diff filter](#line-ranges-and-the-diff-filter) keeps it. Set a fn header if a
    suppression above the item should cover it.
-5. Document the rule in the README's rule table and in a page under `docs/rules/`, and add a section
-   to this document.
+7. Add the code and the name to the frozen table of `codes_are_frozen` in `src/diagnostic.rs`.
+8. Document the rule in a page under `docs/rules/`, named after the rule and showing its code. Add
+   it to the index in `docs/rules/README.md` and to the README's rule table, and add a section to
+   this document.
 
 A rule reads the file only through its `FileContext`. When `syntax_tree` returns `None`, the rule
 checks nothing; the context reports the `parse-error`. A rule that skips test code by default asks
 `is_test_module` unless `--include-tests` is set, and checks nothing for a test module.
 Rule-agnostic helpers belong in `src/syntax/` and `src/doc/`, next to `src/lexer.rs` and
 `src/markdown/`.
+
+### Deprecating a rule
+
+A rule is never deleted from the registry:
+
+1. Return `true` for it in `RuleId::is_registered_as_deprecated`. Keep its variant, its name and its
+   code, and keep its row in the frozen table.
+2. Delete its checker module and its `Rule` variant. `Rule::new` then has no checker for it, and its
+   arm is unreachable, since `RuleSet` never holds a deprecated rule.
+3. Mark it deprecated in the index of `docs/rules/README.md` and in the README, and say on its page
+   what replaced it. Keep the page, since its URL is built from the rule's name.
 
 ## Comment lexer
 
@@ -1505,9 +1559,9 @@ visibility, or its keyword):
 Examples:
 
 ```text
-src/a.rs:12:1: symbol-order: pub fn `run` should come after pub struct `Runner`: pub items come before private items
-src/a.rs:30:1: symbol-order: impl `Display for Runner` should come after impl `Runner`: a type's impl blocks directly follow it
-src/a.rs:41:5: symbol-order: pub fn `new` should come before private fn `helper`: pub fns come before private fns
+src/a.rs:12:1: ORG001 symbol-order: pub fn `run` should come after pub struct `Runner`: pub items come before private items
+src/a.rs:30:1: ORG001 symbol-order: impl `Display for Runner` should come after impl `Runner`: a type's impl blocks directly follow it
+src/a.rs:41:5: ORG001 symbol-order: pub fn `new` should come before private fn `helper`: pub fns come before private fns
 ```
 
 The anchor span runs from the first line of the earlier of the flagged and the reference item to the
@@ -1601,13 +1655,17 @@ The suppression forms and their user-facing semantics are in
 * Candidates are removed from the comment stream that `comment_lines()` returns. The removed line
   breaks the run of consecutive lines, so a candidate of any form, valid or not, ends a
   `comment-greedy-wrap` block.
-* `Directive::parse` reads the keyword of a `SuppressionKind`, the rule ID list and the reason. An
-  unknown keyword, an unknown or meta rule ID, or a missing reason (for every form but `allow-end`)
-  is an `InvalidSuppression`.
+* `Directive::parse` reads the keyword of a `SuppressionKind`, the list of `RuleSelector`s and the
+  reason. It expands the selectors to rules, without duplicates, and splits off the deprecated ones.
+  An unknown keyword, an unknown or meta selector, or a missing reason (for every form but
+  `allow-end`) is an `InvalidSuppression`.
+* A valid directive that names a deprecated rule gets one `unused-suppression` per deprecated rule,
+  at its comment. If it names only deprecated rules, it becomes no suppression at all, so the
+  placement and region checks of its form don't apply.
 * A `Parser` processes the candidates in source order, and keeps the open regions.
 
-The result is `ParsedComments`: the `Suppressions`, the remaining comment lines, and the
-`invalid-suppression` diagnostics.
+The result is `ParsedComments`: the `Suppressions`, the remaining comment lines, the
+`invalid-suppression` diagnostics, and the `unused-suppression` diagnostics of deprecated rules.
 
 Each valid suppression has a `Scope`:
 
@@ -1651,9 +1709,10 @@ line is in range.
 
 `src/diagnostic.rs` defines:
 
-* `DiagnosticCode`: `Rule(RuleId)`, or one of the meta codes `InvalidSuppression`,
-  `UnusedSuppression` and `ParseError`. Meta codes are always on, aren't selected by `--rule`, and
-  can't be suppressed.
+* `DiagnosticCode`: `Rule(RuleId)`, or one of the meta codes `ParseError`, `InvalidSuppression` and
+  `UnusedSuppression`. `name` gives the rule or meta name, and `code` the stable code, which is
+  `LNT001` to `LNT003` for the meta codes. Meta codes are always on, aren't selected by `--rule`,
+  and can't be suppressed.
 * `Position`: a 1-based line and column, with columns in Unicode scalar values. `proc-macro2`
   columns are 0-based scalar counts, so `syntax/span.rs` adds 1.
 * `Diagnostic`: a code, a position, a message, an anchor span, and an optional fn header.
@@ -1675,10 +1734,12 @@ The fn header is used only by `allow` suppressions, as [Suppression
 internals](#suppression-internals) describes.
 
 `FileDiagnostic` pairs a diagnostic with its file path, as `source::discover` normalized it.
-`sort_and_dedup` sorts by path, line, column, code and message, and removes the duplicates that
-would print the same line. `render` prints the text format, or a GitHub workflow command. In the
-GitHub format, `%`, `\r` and `\n` are percent-encoded everywhere, and `:` and `,` are also encoded
-in the property values.
+`sort_and_dedup` sorts by path, line, column, rule or meta name and message, and removes the
+duplicates that would print the same line. Sorting by name rather than by code keeps the order the
+output had before codes existed. `render` prints the text format, `<path>:<line>:<column>: <code>
+<name>: <message>`, or a GitHub workflow command titled `<code> <name>`. In the GitHub format, `%`,
+`\r` and `\n` are percent-encoded everywhere, and `:` and `,` are also encoded in the property
+values.
 
 ## Line ranges and the diff filter
 
@@ -1738,6 +1799,11 @@ fn or comment it belonged to, and the anchor spans cover the rest.
   that produces it or is clean, in the rule's own unit tests. `doc/section.rs`,
   `doc/param_section.rs`, `syntax/visibility.rs`, `syntax/crate_names.rs` and `syntax/doc_items.rs`
   have their own unit tests.
+* `diagnostic.rs` freezes the code table: `codes_are_frozen` lists every `(code, name)` pair, so
+  renumbering or reusing a code fails a test. Other tests check that the codes and names are unique,
+  that each code is well-formed, and that each set is numbered from 1 without gaps.
+* The deprecation paths are tested with `RuleId::with_deprecated`, through the real entry points:
+  `RuleSet`, `RuleSelector`, `Cli`, `Directive::parse` and `FileChecker::check`.
 * `tests/cli.rs` runs the built binary (`CARGO_BIN_EXE_yscope-rust-linter`) on files each test
   writes under `CARGO_TARGET_TMPDIR`. It covers the output format and order, exit codes, the
   directory walk, `@generated` skipping, `--rule`, `--exclude`, `--diff -`, `--format github` and

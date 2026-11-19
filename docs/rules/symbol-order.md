@@ -1,5 +1,7 @@
 # `symbol-order`
 
+Code: `ORG001`, in the `ORG` set. See the [rule index](README.md) for the codes of all rules.
+
 The items of each module must follow the symbol ordering convention of the y-scope Rust coding
 style:
 
@@ -43,9 +45,9 @@ pub fn run(runner: &Runner) -> usize {
 
 ```console
 $ yscope-rust-linter example.rs
-example.rs:3:1: symbol-order: private const `DEFAULT_LIMIT` should come after pub fn `run`: pub items come before private items
-example.rs:15:1: symbol-order: impl `Runner` should come after pub struct `Runner`: inherent impls come before impls of external traits
-example.rs:20:5: symbol-order: pub fn `new` should come before private fn `clamped`: pub fns come before private fns
+example.rs:3:1: ORG001 symbol-order: private const `DEFAULT_LIMIT` should come after pub fn `run`: pub items come before private items
+example.rs:15:1: ORG001 symbol-order: impl `Runner` should come after pub struct `Runner`: inherent impls come before impls of external traits
+example.rs:20:5: ORG001 symbol-order: pub fn `new` should come before private fn `clamped`: pub fns come before private fns
 ```
 
 Each diagnostic names the item to move, where it should go, and the part of the convention it
@@ -143,7 +145,7 @@ pub(crate) fn reload(text: &str) -> usize {
 
 ```console
 $ yscope-rust-linter example.rs
-example.rs:1:1: symbol-order: private fn `parse` should come after pub(crate) fn `reload`: pub(crate) items come before private items
+example.rs:1:1: ORG001 symbol-order: private fn `parse` should come after pub(crate) fn `reload`: pub(crate) items come before private items
 ```
 
 ### Kinds
@@ -170,7 +172,7 @@ pub struct Config {
 
 ```console
 $ yscope-rust-linter example.rs
-example.rs:1:1: symbol-order: pub fn `version` should come after pub struct `Config`: types and their impls come before fns
+example.rs:1:1: ORG001 symbol-order: pub fn `version` should come after pub struct `Config`: types and their impls come before fns
 ```
 
 ### Impl blocks
@@ -218,8 +220,8 @@ impl fmt::Debug for Cache {
 
 ```console
 $ yscope-rust-linter example.rs
-example.rs:17:1: symbol-order: impl `Storage for Cache` should come after pub struct `Cache`: impls of crate traits come before impls of external traits
-example.rs:21:1: symbol-order: impl `fmt::Debug for Cache` should come after impl `Clone for Cache`: a type's impl blocks directly follow it
+example.rs:17:1: ORG001 symbol-order: impl `Storage for Cache` should come after pub struct `Cache`: impls of crate traits come before impls of external traits
+example.rs:21:1: ORG001 symbol-order: impl `fmt::Debug for Cache` should come after impl `Clone for Cache`: a type's impl blocks directly follow it
 ```
 
 An impl block belongs to a type only when its self type is a plain name, with or without generic
@@ -259,8 +261,8 @@ impl Window {
 
 ```console
 $ yscope-rust-linter example.rs
-example.rs:10:5: symbol-order: pub fn `new` should come before private fn `clamp`: pub fns come before private fns
-example.rs:16:5: symbol-order: pub const `MAX_WIDTH` should come before private fn `clamp`: associated consts come before fns
+example.rs:10:5: ORG001 symbol-order: pub fn `new` should come before private fn `clamp`: pub fns come before private fns
+example.rs:16:5: ORG001 symbol-order: pub const `MAX_WIDTH` should come before private fn `clamp`: associated consts come before fns
 ```
 
 Associated types and macro invocations in an impl block are exempt.
@@ -324,7 +326,7 @@ pub fn third() -> u32 {
 
 ```console
 $ yscope-rust-linter example.rs
-example.rs:1:1: symbol-order: private fn `helper` should come after pub fn `third`: pub items come before private items
+example.rs:1:1: ORG001 symbol-order: private fn `helper` should come after pub fn `third`: pub items come before private items
 ```
 
 When several sets of the same size would work, the rule keeps the earlier items in place and reports
@@ -347,7 +349,7 @@ pub fn second() -> u32 {
 
 ```console
 $ yscope-rust-linter example.rs
-example.rs:9:1: symbol-order: pub fn `second` should come after pub fn `first`: pub items come before private items
+example.rs:9:1: ORG001 symbol-order: pub fn `second` should come after pub fn `first`: pub items come before private items
 ```
 
 ## Diagnostics

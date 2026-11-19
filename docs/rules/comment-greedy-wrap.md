@@ -1,5 +1,7 @@
 # `comment-greedy-wrap`
 
+Code: `DOC001`, in the `DOC` set. See the [rule index](README.md) for the codes of all rules.
+
 Every paragraph of a `//`, `///` or `//!` comment must be filled greedily to the width, which is 100
 columns by default. Each line holds as many words as fit, so a line is flagged when the first words
 of the next line in the same paragraph would still fit at its end, and moving them up keeps the
@@ -18,7 +20,7 @@ fn running_tasks() -> usize {
 
 ```console
 $ yscope-rust-linter example.rs
-example.rs:1:1: comment-greedy-wrap: line is 40 columns wide and the next line's first word `still` (5 columns) fits within 100; move it up
+example.rs:1:1: DOC001 comment-greedy-wrap: line is 40 columns wide and the next line's first word `still` (5 columns) fits within 100; move it up
 ```
 
 The fix fills the paragraph:
@@ -74,7 +76,7 @@ fn retry() {
 
 ```console
 $ yscope-rust-linter example.rs
-example.rs:2:5: comment-greedy-wrap: line is 95 columns wide and the next line's first word `as` (2 columns) fits within 100; move it up
+example.rs:2:5: DOC001 comment-greedy-wrap: line is 95 columns wide and the next line's first word `as` (2 columns) fits within 100; move it up
 ```
 
 With `permanently` as the next word, the joined line would be 107 columns wide, so nothing is
@@ -106,7 +108,7 @@ fn retry() {
 
 ```console
 $ yscope-rust-linter --width 80 example.rs
-example.rs:2:5: comment-greedy-wrap: line is 70 columns wide and the next line's first word `it` (2 columns) fits within 80; move it up
+example.rs:2:5: DOC001 comment-greedy-wrap: line is 70 columns wide and the next line's first word `it` (2 columns) fits within 80; move it up
 ```
 
 `    // éé` is 9 columns wide, although it is 11 bytes long. So `x` fits within 11 columns:
@@ -120,7 +122,7 @@ fn f() {
 
 ```console
 $ yscope-rust-linter --width 11 example.rs
-example.rs:2:5: comment-greedy-wrap: line is 9 columns wide and the next line's first word `x` (1 column) fits within 11; move it up
+example.rs:2:5: DOC001 comment-greedy-wrap: line is 9 columns wide and the next line's first word `x` (1 column) fits within 11; move it up
 ```
 
 ## Moves that would change the Markdown
@@ -139,7 +141,7 @@ fn children() {}
 
 ```console
 $ yscope-rust-linter example.rs
-example.rs:1:1: comment-greedy-wrap: line is 52 columns wide and the next line's first 2 words ``num_children -` (15 columns) fit within 100; move them up
+example.rs:1:1: DOC001 comment-greedy-wrap: line is 52 columns wide and the next line's first 2 words ``num_children -` (15 columns) fit within 100; move them up
 ```
 
 When no number of words both fits and leaves a valid rest, nothing is flagged. Here the first line
@@ -181,7 +183,7 @@ fn f() {}
 
 ```console
 $ yscope-rust-linter example.rs
-example.rs:1:1: comment-greedy-wrap: line is 29 columns wide and the next line's first word `2024.` (5 columns) fits within 100; move it up
+example.rs:1:1: DOC001 comment-greedy-wrap: line is 29 columns wide and the next line's first word `2024.` (5 columns) fits within 100; move it up
 ```
 
 ## Which comments are checked
@@ -310,7 +312,7 @@ fn start() {}
 
 ```console
 $ yscope-rust-linter example.rs
-example.rs:3:1: comment-greedy-wrap: line is 32 columns wide and the next line's first word `shutdown` (8 columns) fits within 100; move it up
+example.rs:3:1: DOC001 comment-greedy-wrap: line is 32 columns wide and the next line's first word `shutdown` (8 columns) fits within 100; move it up
 ```
 
 ### Code fences
@@ -349,7 +351,7 @@ fn f() {}
 
 ```console
 $ yscope-rust-linter example.rs
-example.rs:7:1: comment-greedy-wrap: line is 25 columns wide and the next line's first word `is` (2 columns) fits within 100; move it up
+example.rs:7:1: DOC001 comment-greedy-wrap: line is 25 columns wide and the next line's first word `is` (2 columns) fits within 100; move it up
 ```
 
 ### Headers
@@ -375,7 +377,7 @@ fn f() {
 
 ```console
 $ yscope-rust-linter example.rs
-example.rs:2:5: comment-greedy-wrap: line is 30 columns wide and the next line's first word `#544,` (5 columns) fits within 100; move it up
+example.rs:2:5: DOC001 comment-greedy-wrap: line is 30 columns wide and the next line's first word `#544,` (5 columns) fits within 100; move it up
 ```
 
 A setext heading, a paragraph followed by an underline of `=` or `-` alone, is a header too. None of
@@ -391,7 +393,7 @@ fn f() {}
 
 ```console
 $ yscope-rust-linter example.rs
-example.rs:3:1: comment-greedy-wrap: line is 27 columns wide and the next line's first word `configuration` (13 columns) fits within 100; move it up
+example.rs:3:1: DOC001 comment-greedy-wrap: line is 27 columns wide and the next line's first word `configuration` (13 columns) fits within 100; move it up
 ```
 
 A header also closes every open list item. See [Indentation changes](#indentation-changes).
@@ -429,7 +431,7 @@ fn f() {}
 
 ```console
 $ yscope-rust-linter example.rs
-example.rs:3:1: comment-greedy-wrap: line is 34 columns wide and the next line's first word `ends` (4 columns) fits within 100; move it up
+example.rs:3:1: DOC001 comment-greedy-wrap: line is 34 columns wide and the next line's first word `ends` (4 columns) fits within 100; move it up
 ```
 
 Without whitespace or the end of the line after the marker, the line is prose. `--verbose`,
@@ -443,7 +445,7 @@ fn f() {}
 
 ```console
 $ yscope-rust-linter example.rs
-example.rs:1:1: comment-greedy-wrap: line is 12 columns wide and the next line's first word `--verbose` (9 columns) fits within 100; move it up
+example.rs:1:1: DOC001 comment-greedy-wrap: line is 12 columns wide and the next line's first word `--verbose` (9 columns) fits within 100; move it up
 ```
 
 ### Bullet continuations
@@ -465,9 +467,9 @@ fn f() {}
 
 ```console
 $ yscope-rust-linter example.rs
-example.rs:1:1: comment-greedy-wrap: line is 30 columns wide and the next line's first word `early.` (6 columns) fits within 100; move it up
-example.rs:4:1: comment-greedy-wrap: line is 31 columns wide and the next line's first word `early.` (6 columns) fits within 100; move it up
-example.rs:6:1: comment-greedy-wrap: line is 33 columns wide and the next line's first word `early.` (6 columns) fits within 100; move it up
+example.rs:1:1: DOC001 comment-greedy-wrap: line is 30 columns wide and the next line's first word `early.` (6 columns) fits within 100; move it up
+example.rs:4:1: DOC001 comment-greedy-wrap: line is 31 columns wide and the next line's first word `early.` (6 columns) fits within 100; move it up
+example.rs:6:1: DOC001 comment-greedy-wrap: line is 33 columns wide and the next line's first word `early.` (6 columns) fits within 100; move it up
 ```
 
 A list item stays open across blank lines. So a later paragraph of the same item, at its content
@@ -483,7 +485,7 @@ fn f() {}
 
 ```console
 $ yscope-rust-linter example.rs
-example.rs:3:1: comment-greedy-wrap: line is 31 columns wide and the next line's first word `early.` (6 columns) fits within 100; move it up
+example.rs:3:1: DOC001 comment-greedy-wrap: line is 31 columns wide and the next line's first word `early.` (6 columns) fits within 100; move it up
 ```
 
 ### Indentation changes
@@ -555,7 +557,7 @@ fn f() {}
 
 ```console
 $ yscope-rust-linter example.rs
-example.rs:3:1: comment-greedy-wrap: line is 24 columns wide and the next line's first word `is` (2 columns) fits within 100; move it up
+example.rs:3:1: DOC001 comment-greedy-wrap: line is 24 columns wide and the next line's first word `is` (2 columns) fits within 100; move it up
 ```
 
 ### HTML blocks
@@ -584,7 +586,7 @@ fn f() {}
 
 ```console
 $ yscope-rust-linter example.rs
-example.rs:6:1: comment-greedy-wrap: line is 33 columns wide and the next line's first word `is` (2 columns) fits within 100; move it up
+example.rs:6:1: DOC001 comment-greedy-wrap: line is 33 columns wide and the next line's first word `is` (2 columns) fits within 100; move it up
 ```
 
 An autolink such as `<https://example.com>` starts no HTML block, and neither does a tag followed
@@ -606,7 +608,7 @@ fn f() {}
 
 ```console
 $ yscope-rust-linter example.rs
-example.rs:4:1: comment-greedy-wrap: line is 23 columns wide and the next line's first word `table` (5 columns) fits within 100; move it up
+example.rs:4:1: DOC001 comment-greedy-wrap: line is 23 columns wide and the next line's first word `table` (5 columns) fits within 100; move it up
 ```
 
 A row without the leading `|`, such as `a | b |`, is prose.
@@ -640,7 +642,7 @@ fn f() {
 
 ```console
 $ yscope-rust-linter example.rs
-example.rs:4:5: comment-greedy-wrap: line is 32 columns wide and the next line's first word `types.` (6 columns) fits within 100; move it up
+example.rs:4:5: DOC001 comment-greedy-wrap: line is 32 columns wide and the next line's first word `types.` (6 columns) fits within 100; move it up
 ```
 
 `Note:` and `NOTES:` are not tags, so they are prose:
@@ -654,7 +656,7 @@ fn f() {
 
 ```console
 $ yscope-rust-linter example.rs
-example.rs:2:5: comment-greedy-wrap: line is 29 columns wide and the next line's first word `Note:` (5 columns) fits within 100; move it up
+example.rs:2:5: DOC001 comment-greedy-wrap: line is 29 columns wide and the next line's first word `Note:` (5 columns) fits within 100; move it up
 ```
 
 ### Formula and pseudo-code lines
@@ -681,7 +683,7 @@ fn f() {
 
 ```console
 $ yscope-rust-linter example.rs
-example.rs:7:5: comment-greedy-wrap: line is 28 columns wide and the next line's first word `is` (2 columns) fits within 100; move it up
+example.rs:7:5: DOC001 comment-greedy-wrap: line is 28 columns wide and the next line's first word `is` (2 columns) fits within 100; move it up
 ```
 
 `The total number = a + b` is prose, since `number` is not an operator. `x =` is prose, since
@@ -706,7 +708,7 @@ fn f() {}
 
 ```console
 $ yscope-rust-linter example.rs
-example.rs:5:1: comment-greedy-wrap: line is 30 columns wide and the next line's first word `is` (2 columns) fits within 100; move it up
+example.rs:5:1: DOC001 comment-greedy-wrap: line is 30 columns wide and the next line's first word `is` (2 columns) fits within 100; move it up
 ```
 
 ### A trailing colon is not a boundary
@@ -723,7 +725,7 @@ fn f() {
 
 ```console
 $ yscope-rust-linter example.rs
-example.rs:2:5: comment-greedy-wrap: line is 37 columns wide and the next line's first word `The` (3 columns) fits within 100; move it up
+example.rs:2:5: DOC001 comment-greedy-wrap: line is 37 columns wide and the next line's first word `The` (3 columns) fits within 100; move it up
 ```
 
 ## The diagnostic and how to fix it
@@ -784,7 +786,7 @@ pub struct Config {
 
 ```console
 $ yscope-rust-linter example.rs
-example.rs:2:5: comment-greedy-wrap: line is 86 columns wide and the next line's first word `configuration` (13 columns) fits within 100; move it up, but rustfmt wraps this comment one column early (rust-lang/rustfmt#6180), so reword the paragraph instead
+example.rs:2:5: DOC001 comment-greedy-wrap: line is 86 columns wide and the next line's first word `configuration` (13 columns) fits within 100; move it up, but rustfmt wraps this comment one column early (rust-lang/rustfmt#6180), so reword the paragraph instead
 ```
 
 Moving `configuration` up makes the line 100 columns wide, and rustfmt moves it back. A reworded

@@ -12,6 +12,7 @@ rule is wrong for that code, and say why in the reason.
 * [`allow-file`: the whole file](#allow-file-the-whole-file)
 * [Invalid suppressions](#invalid-suppressions)
 * [Unused suppressions](#unused-suppressions)
+  * [Deprecated rules](#deprecated-rules)
 * [Meta codes](#meta-codes)
 * [Suppressions with `--diff` and `FILE:RANGES`](#suppressions-with---diff-and-fileranges)
 
@@ -29,8 +30,11 @@ There are five forms:
 
 * A suppression is a plain `//` comment whose text starts with `yscope-rust-linter:`. A `///` or
   `//!` comment is never a suppression, so a suppression can't leak into rustdoc.
-* The rule IDs are `comment-greedy-wrap`, `errors-doc`, `symbol-order`, `trait-params-doc` and
-  `type-params-doc`. A suppression may name several, separated by commas.
+* Each `<rule-id>` is a rule name, such as `type-params-doc`, its code, such as `DOC003`, or a set
+  prefix, `DOC` or `ORG`, which names every rule of the set. The [rule index](rules/README.md) lists
+  the names and codes. A suppression may name several, separated by commas.
+* Names are lowercase, and codes and set prefixes uppercase. A lowercase code such as `doc003` is an
+  unknown rule.
 * Every form but `allow-end` needs a reason after `):`. The reason must not be blank. `allow-end`
   may have one too.
 * Spaces after `yscope-rust-linter:`, around each rule ID and before the `:` of the reason are
@@ -43,6 +47,13 @@ A good reason says why the rule is wrong here, not what the rule checks:
 ```text
 // yscope-rust-linter: allow(comment-greedy-wrap): a hand-aligned frame layout
 // yscope-rust-linter: allow(errors-doc): the errors come from the callback the caller provides
+```
+
+A code or a set works the same as the names it stands for:
+
+```text
+// yscope-rust-linter: allow(DOC003): the parameters are documented on the trait
+// yscope-rust-linter: allow-file(DOC): the bindings are generated
 ```
 
 ## `allow`: a line, a comment block or a fn
@@ -81,8 +92,8 @@ fn f() {
 
 ```console
 $ yscope-rust-linter example.rs
-example.rs:2:5: comment-greedy-wrap: line is 25 columns wide and the next line's first word `magic` (5 columns) fits within 100; move it up
-example.rs:3:5: comment-greedy-wrap: line is 22 columns wide and the next line's first word `length` (6 columns) fits within 100; move it up
+example.rs:2:5: DOC001 comment-greedy-wrap: line is 25 columns wide and the next line's first word `magic` (5 columns) fits within 100; move it up
+example.rs:3:5: DOC001 comment-greedy-wrap: line is 22 columns wide and the next line's first word `length` (6 columns) fits within 100; move it up
 ```
 
 An own-line `allow` above a code line covers that line:
@@ -155,8 +166,8 @@ fn f() {
 
 ```console
 $ yscope-rust-linter example.rs
-example.rs:2:5: unused-suppression: this suppression of comment-greedy-wrap covers no finding on line 3; remove it
-example.rs:4:5: comment-greedy-wrap: line is 8 columns wide and the next line's first word `b` (1 column) fits within 100; move it up
+example.rs:2:5: LNT003 unused-suppression: this suppression of comment-greedy-wrap covers no finding on line 3; remove it
+example.rs:4:5: DOC001 comment-greedy-wrap: line is 8 columns wide and the next line's first word `b` (1 column) fits within 100; move it up
 ```
 
 ## `allow-item`: a whole item
@@ -193,7 +204,7 @@ impl Other {
 
 ```console
 $ yscope-rust-linter example.rs
-example.rs:12:5: comment-greedy-wrap: line is 28 columns wide and the next line's first word `is` (2 columns) fits within 100; move it up
+example.rs:12:5: DOC001 comment-greedy-wrap: line is 28 columns wide and the next line's first word `is` (2 columns) fits within 100; move it up
 ```
 
 Among the attributes and doc comments of a fn:
@@ -232,7 +243,7 @@ impl Runner {
 
 ```console
 $ yscope-rust-linter example.rs
-example.rs:7:5: comment-greedy-wrap: line is 28 columns wide and the next line's first word `waits.` (6 columns) fits within 100; move it up
+example.rs:7:5: DOC001 comment-greedy-wrap: line is 28 columns wide and the next line's first word `waits.` (6 columns) fits within 100; move it up
 ```
 
 ## `allow-start` and `allow-end`: a region
@@ -261,7 +272,7 @@ fn c() {}
 
 ```console
 $ yscope-rust-linter example.rs
-example.rs:9:1: comment-greedy-wrap: line is 28 columns wide and the next line's first word `region.` (7 columns) fits within 100; move it up
+example.rs:9:1: DOC001 comment-greedy-wrap: line is 28 columns wide and the next line's first word `region.` (7 columns) fits within 100; move it up
 ```
 
 One `allow-start` can open regions for both rules, which separate `allow-end`s close:
@@ -288,7 +299,7 @@ fn load() -> Result<(), Error> {
 
 ```console
 $ yscope-rust-linter example.rs
-example.rs:5:1: comment-greedy-wrap: line is 28 columns wide and the next line's first word `early.` (6 columns) fits within 100; move it up
+example.rs:5:1: DOC001 comment-greedy-wrap: line is 28 columns wide and the next line's first word `early.` (6 columns) fits within 100; move it up
 ```
 
 ## `allow-file`: the whole file
@@ -332,14 +343,14 @@ fn f() {}
 
 ```console
 $ yscope-rust-linter example.rs
-example.rs:2:1: invalid-suppression: malformed suppression; expected `// yscope-rust-linter: allow(<rule-id>[, <rule-id>]...): <reason>`
-example.rs:3:1: invalid-suppression: suppression needs a reason after `):`; expected `// yscope-rust-linter: allow(<rule-id>[, <rule-id>]...): <reason>`
-example.rs:4:1: invalid-suppression: suppression names no rule; expected `// yscope-rust-linter: allow(<rule-id>[, <rule-id>]...): <reason>`
-example.rs:5:1: invalid-suppression: malformed suppression; expected `// yscope-rust-linter: allow(<rule-id>[, <rule-id>]...): <reason>`
-example.rs:6:1: invalid-suppression: unknown suppression form `allow-block`; expected one of `allow`, `allow-item`, `allow-start`, `allow-end`, `allow-file`
-example.rs:7:1: invalid-suppression: unknown rule `errors_doc`; expected one of comment-greedy-wrap, errors-doc, symbol-order, trait-params-doc, type-params-doc
-example.rs:8:1: invalid-suppression: `parse-error` is not a rule and can't be suppressed
-example.rs:9:1: invalid-suppression: malformed suppression; expected `// yscope-rust-linter: allow-end(<rule-id>[, <rule-id>]...)`
+example.rs:2:1: LNT002 invalid-suppression: malformed suppression; expected `// yscope-rust-linter: allow(<rule-id>[, <rule-id>]...): <reason>`
+example.rs:3:1: LNT002 invalid-suppression: suppression needs a reason after `):`; expected `// yscope-rust-linter: allow(<rule-id>[, <rule-id>]...): <reason>`
+example.rs:4:1: LNT002 invalid-suppression: suppression names no rule; expected `// yscope-rust-linter: allow(<rule-id>[, <rule-id>]...): <reason>`
+example.rs:5:1: LNT002 invalid-suppression: malformed suppression; expected `// yscope-rust-linter: allow(<rule-id>[, <rule-id>]...): <reason>`
+example.rs:6:1: LNT002 invalid-suppression: unknown suppression form `allow-block`; expected one of `allow`, `allow-item`, `allow-start`, `allow-end`, `allow-file`
+example.rs:7:1: LNT002 invalid-suppression: unknown rule `errors_doc`; expected a rule name or code, one of comment-greedy-wrap (DOC001), errors-doc (DOC002), symbol-order (ORG001), trait-params-doc (DOC004), type-params-doc (DOC003), or a set, one of DOC, ORG
+example.rs:8:1: LNT002 invalid-suppression: `parse-error` is not a rule and can't be suppressed
+example.rs:9:1: LNT002 invalid-suppression: malformed suppression; expected `// yscope-rust-linter: allow-end(<rule-id>[, <rule-id>]...)`
 ```
 
 A suppression in the wrong place is invalid too:
@@ -358,10 +369,10 @@ fn h() {
 
 ```console
 $ yscope-rust-linter example.rs
-example.rs:1:11: invalid-suppression: an `allow-item` suppression can't follow code on its line; put it on its own line directly above an item, or among the item's attributes and doc comments
-example.rs:2:1: invalid-suppression: no item directly follows this `allow-item` suppression; put it on its own line directly above an item, or among the item's attributes and doc comments
-example.rs:6:5: invalid-suppression: no item directly follows this `allow-item` suppression; put it on its own line directly above an item, or among the item's attributes and doc comments
-example.rs:9:1: invalid-suppression: an `allow-file` suppression must be in the file header, before the first item and its attributes and doc comments
+example.rs:1:11: LNT002 invalid-suppression: an `allow-item` suppression can't follow code on its line; put it on its own line directly above an item, or among the item's attributes and doc comments
+example.rs:2:1: LNT002 invalid-suppression: no item directly follows this `allow-item` suppression; put it on its own line directly above an item, or among the item's attributes and doc comments
+example.rs:6:5: LNT002 invalid-suppression: no item directly follows this `allow-item` suppression; put it on its own line directly above an item, or among the item's attributes and doc comments
+example.rs:9:1: LNT002 invalid-suppression: an `allow-file` suppression must be in the file header, before the first item and its attributes and doc comments
 ```
 
 So are unmatched regions:
@@ -384,9 +395,9 @@ fn g() {}
 
 ```console
 $ yscope-rust-linter example.rs
-example.rs:2:1: invalid-suppression: `comment-greedy-wrap` already has a region open from line 1; end it with `allow-end` first
-example.rs:6:1: invalid-suppression: this `allow-end` of comment-greedy-wrap closes no open region; open it with `allow-start` first
-example.rs:7:1: invalid-suppression: this `allow-start` of errors-doc has no matching `allow-end`; close it with `// yscope-rust-linter: allow-end(errors-doc)`
+example.rs:2:1: LNT002 invalid-suppression: `comment-greedy-wrap` already has a region open from line 1; end it with `allow-end` first
+example.rs:6:1: LNT002 invalid-suppression: this `allow-end` of comment-greedy-wrap closes no open region; open it with `allow-start` first
+example.rs:7:1: LNT002 invalid-suppression: this `allow-start` of errors-doc has no matching `allow-end`; close it with `// yscope-rust-linter: allow-end(errors-doc)`
 ```
 
 When a file fails to lex or parse, its items can't be located, so every `allow-item` in it is
@@ -399,8 +410,8 @@ fn f( {}
 
 ```console
 $ yscope-rust-linter example.rs
-example.rs:1:1: invalid-suppression: can't locate the item of this `allow-item` suppression: syn failed to parse the file (cannot parse string into token stream)
-example.rs:2:5: parse-error: syn failed to parse the file (cannot parse string into token stream); errors-doc, symbol-order, trait-params-doc, type-params-doc are skipped
+example.rs:1:1: LNT002 invalid-suppression: can't locate the item of this `allow-item` suppression: syn failed to parse the file (cannot parse string into token stream)
+example.rs:2:5: LNT001 parse-error: syn failed to parse the file (cannot parse string into token stream); errors-doc, symbol-order, trait-params-doc, type-params-doc are skipped
 ```
 
 A `///` or `//!` comment that looks like a suppression is a doc line, not an invalid suppression. It
@@ -425,16 +436,18 @@ fn g() {}
 
 ```console
 $ yscope-rust-linter example.rs
-example.rs:1:1: unused-suppression: this `allow-file` suppression of errors-doc covers no finding in the file; remove it
-example.rs:2:1: unused-suppression: this suppression of comment-greedy-wrap covers no finding on line 3; remove it
-example.rs:4:1: unused-suppression: this `allow-item` suppression of comment-greedy-wrap covers no finding in its item on lines 5-6; remove it
-example.rs:7:1: unused-suppression: this region suppression of comment-greedy-wrap covers no finding between lines 7 and 9; remove it
+example.rs:1:1: LNT003 unused-suppression: this `allow-file` suppression of errors-doc covers no finding in the file; remove it
+example.rs:2:1: LNT003 unused-suppression: this suppression of comment-greedy-wrap covers no finding on line 3; remove it
+example.rs:4:1: LNT003 unused-suppression: this `allow-item` suppression of comment-greedy-wrap covers no finding in its item on lines 5-6; remove it
+example.rs:7:1: LNT003 unused-suppression: this region suppression of comment-greedy-wrap covers no finding between lines 7 and 9; remove it
 ```
 
 * A region is reported at its `allow-start`.
 * A suppression is reported as unused only when every rule it names is enabled. So the run below,
   with only `comment-greedy-wrap` enabled, doesn't report the `allow-file(errors-doc)`.
 * A suppression that names two rules is used when it covers a finding of either.
+* A set prefix names every rule of the set. So `allow(DOC)` is reported as unused only when every
+  `DOC` rule is enabled.
 
 ```rust
 // yscope-rust-linter: allow-file(errors-doc): reason
@@ -450,21 +463,36 @@ fn g() {}
 
 ```console
 $ yscope-rust-linter --rule comment-greedy-wrap example.rs
-example.rs:2:1: unused-suppression: this suppression of comment-greedy-wrap covers no finding on line 3; remove it
-example.rs:4:1: unused-suppression: this `allow-item` suppression of comment-greedy-wrap covers no finding in its item on lines 5-6; remove it
-example.rs:7:1: unused-suppression: this region suppression of comment-greedy-wrap covers no finding between lines 7 and 9; remove it
+example.rs:2:1: LNT003 unused-suppression: this suppression of comment-greedy-wrap covers no finding on line 3; remove it
+example.rs:4:1: LNT003 unused-suppression: this `allow-item` suppression of comment-greedy-wrap covers no finding in its item on lines 5-6; remove it
+example.rs:7:1: LNT003 unused-suppression: this region suppression of comment-greedy-wrap covers no finding between lines 7 and 9; remove it
 ```
+
+### Deprecated rules
+
+A deprecated rule never reports a finding, so a suppression can't cover anything for it. Naming one,
+by name or by code, is still valid, and each deprecated rule a suppression names is an
+`unused-suppression` at the suppression comment, whatever rules are enabled:
+
+```text
+example.rs:3:1: LNT003 unused-suppression: `old-rule` (DOC009) is deprecated and never reports a finding; remove it from this suppression
+```
+
+The suppression still covers the findings of the other rules it names. A set prefix never names a
+deprecated rule. See the [deprecation policy](rules/README.md#deprecation-policy).
 
 ## Meta codes
 
 These codes belong to no rule. They are always on, and no suppression can silence them:
 
-* `invalid-suppression`: a malformed or misplaced suppression.
-* `unused-suppression`: a suppression that covered no finding.
-* `parse-error`: a file that can't be lexed, or that `syn` can't parse. For a lex error, only the
-  comments before it are checked. For a `syn` error, `errors-doc` skips the file.
+* `LNT001 parse-error`: a file that can't be lexed, or that `syn` can't parse. For a lex error, only
+  the comments before it are checked. For a `syn` error, `errors-doc` skips the file.
+* `LNT002 invalid-suppression`: a malformed or misplaced suppression.
+* `LNT003 unused-suppression`: a suppression that covered no finding, or a deprecated rule that a
+  suppression names.
 
-Naming a meta code in a suppression is an `invalid-suppression`.
+Naming a meta code in a suppression, by name, by code or by the `LNT` prefix, is an
+`invalid-suppression`.
 
 ## Suppressions with `--diff` and `FILE:RANGES`
 
@@ -489,7 +517,7 @@ fn g() {}
 
 ```console
 $ yscope-rust-linter example.rs:5
-example.rs:4:1: comment-greedy-wrap: line is 22 columns wide and the next line's first word `early.` (6 columns) fits within 100; move it up
+example.rs:4:1: DOC001 comment-greedy-wrap: line is 22 columns wide and the next line's first word `early.` (6 columns) fits within 100; move it up
 ```
 
 Selecting only line 5 reports the finding on line 4, since line 5 is part of its anchor. The unused

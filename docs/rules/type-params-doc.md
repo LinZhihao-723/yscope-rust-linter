@@ -1,5 +1,7 @@
 # `type-params-doc`
 
+Code: `DOC003`, in the `DOC` set. See the [rule index](README.md) for the codes of all rules.
+
 A documented item with generic parameters must have a `# Type Parameters` section with one bullet
 for each of them: each type parameter, lifetime parameter and const generic. An item without generic
 parameters must not have the section.
@@ -18,8 +20,8 @@ struct Cache<'store, Value, const CAPACITY: usize> {
 
 ```console
 $ yscope-rust-linter example.rs
-example.rs:3:1: type-params-doc: `# Type Parameters` doesn't document `'store`; add "* `'store` - ..."
-example.rs:3:1: type-params-doc: `# Type Parameters` doesn't document `CAPACITY`; add "* `CAPACITY` - ..."
+example.rs:3:1: DOC003 type-params-doc: `# Type Parameters` doesn't document `'store`; add "* `'store` - ..."
+example.rs:3:1: DOC003 type-params-doc: `# Type Parameters` doesn't document `CAPACITY`; add "* `CAPACITY` - ..."
 ```
 
 The section needs a bullet for the lifetime and for the const generic too:
@@ -88,7 +90,7 @@ fn decode<Value: Decode>(bytes: &[u8]) -> Value {
 
 ```console
 $ yscope-rust-linter example.rs
-example.rs:3:5: type-params-doc: trait method `load` has generic parameters but no `# Type Parameters` section; add one with a bullet for each of `Value`
+example.rs:3:5: DOC003 type-params-doc: trait method `load` has generic parameters but no `# Type Parameters` section; add one with a bullet for each of `Value`
 ```
 
 The rule needs the file's syntax tree. A file that `syn` can't parse gets one `parse-error`
@@ -133,7 +135,7 @@ impl<Value> Cache<Value> {
 
 ```console
 $ yscope-rust-linter example.rs
-example.rs:11:5: type-params-doc: `# Type Parameters` documents `Value`, which isn't a generic parameter of method `map`; remove the bullet
+example.rs:11:5: DOC003 type-params-doc: `# Type Parameters` documents `Value`, which isn't a generic parameter of method `map`; remove the bullet
 ```
 
 `get` has no generic parameters of its own, so it needs no section. `Value` belongs to the impl
@@ -152,7 +154,7 @@ fn clear(cache: &mut Cache<u8>) {}
 
 ```console
 $ yscope-rust-linter example.rs
-example.rs:3:1: type-params-doc: fn `clear` has no generic parameters; remove the `# Type Parameters` section
+example.rs:3:1: DOC003 type-params-doc: fn `clear` has no generic parameters; remove the `# Type Parameters` section
 ```
 
 ## The section format
@@ -197,11 +199,11 @@ fn run<'lock, Executor, Job>(executor: &Executor, jobs: Vec<Job>) {}
 
 ```console
 $ yscope-rust-linter example.rs
-example.rs:3:1: type-params-doc: `# Type Parameters` doesn't document `Job`; add "* `Job` - ..."
-example.rs:5:1: type-params-doc: write this `# Type Parameters` bullet as "* `Executor` - description"
-example.rs:6:1: type-params-doc: `Executor` is already documented on line 5; remove this bullet
-example.rs:7:1: type-params-doc: this `# Type Parameters` bullet doesn't start with the generic parameter it documents; write "* `name` - description"
-example.rs:10:1: type-params-doc: the docstring has a second `# Type Parameters` section at the same level; merge them
+example.rs:3:1: DOC003 type-params-doc: `# Type Parameters` doesn't document `Job`; add "* `Job` - ..."
+example.rs:5:1: DOC003 type-params-doc: write this `# Type Parameters` bullet as "* `Executor` - description"
+example.rs:6:1: DOC003 type-params-doc: `Executor` is already documented on line 5; remove this bullet
+example.rs:7:1: DOC003 type-params-doc: this `# Type Parameters` bullet doesn't start with the generic parameter it documents; write "* `name` - description"
+example.rs:10:1: DOC003 type-params-doc: the docstring has a second `# Type Parameters` section at the same level; merge them
 ```
 
 A list that prose introduces isn't checked as parameter bullets:
@@ -222,8 +224,8 @@ struct JobStateHandle<R, T> {
 
 ```console
 $ yscope-rust-linter example.rs
-example.rs:3:1: type-params-doc: `# Type Parameters` doesn't document `R`; add "* `R` - ..."
-example.rs:3:1: type-params-doc: `# Type Parameters` doesn't document `T`; add "* `T` - ..."
+example.rs:3:1: DOC003 type-params-doc: `# Type Parameters` doesn't document `R`; add "* `R` - ..."
+example.rs:3:1: DOC003 type-params-doc: `# Type Parameters` doesn't document `T`; add "* `T` - ..."
 ```
 
 The two bullets belong to the prose, so they aren't reported as bullets without a name.
