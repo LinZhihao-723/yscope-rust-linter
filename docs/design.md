@@ -30,6 +30,7 @@ specification.
   * [Adding a rule](#adding-a-rule)
 * [Comment lexer](#comment-lexer)
 * [Markdown classifier](#markdown-classifier)
+  * [Block starts](#block-starts)
 * [comment-greedy-wrap](#comment-greedy-wrap)
   * [Fit test](#fit-test)
   * [Blocks](#blocks)
@@ -117,8 +118,9 @@ Per-file core:
 * `src/driver.rs`: the run, and the per-file pipeline in `FileChecker`.
 * `src/file_context.rs`: [`FileContext`](#filecontext), the per-file input of the rules.
 * `src/lexer.rs`: the [comment lexer](#comment-lexer).
-* `src/markdown.rs`: the [line-level Markdown classifier](#markdown-classifier) the comment and
-  docstring rules share.
+* `src/markdown/`: the [line-level Markdown classifier](#markdown-classifier) the comment and
+  docstring rules share. `line.rs` recognizes indents, ATX headers, fences, list items and link
+  reference definitions, and `block_start.rs` classifies the block that a line opens.
 * `src/suppression.rs`: [suppression](#suppression-internals) parsing, coverage, and
   unused-suppression reporting.
 * `src/diagnostic.rs`: diagnostic codes, positions, anchor spans, sorting and rendering.
@@ -280,7 +282,7 @@ A rule reads the file only through its `FileContext`. When `syntax_tree` returns
 checks nothing; the context reports the `parse-error`. A rule that skips test code by default asks
 `is_test_module` unless `--include-tests` is set, and checks nothing for a test module.
 Rule-agnostic helpers belong in `src/syntax/` and `src/doc/`, next to `src/lexer.rs` and
-`src/markdown.rs`.
+`src/markdown/`.
 
 ## Comment lexer
 
@@ -337,9 +339,11 @@ token's start. The comment lines before it are kept.
 
 ## Markdown classifier
 
-`src/markdown.rs` classifies one line's text after its comment marker and the one space that usually
+`src/markdown/` classifies one line's text after its comment marker and the one space that usually
 follows it. Both rules use it, so a doc line plays the same role in `comment-greedy-wrap` as in the
-`# Errors` parser:
+`# Errors` parser.
+
+`line.rs` holds the recognizers that the docstring rules read sections by:
 
 * `indent`: the count of leading spaces and tabs.
 * `atx_header`: an indent of at most 3, then 1 to 6 `#`, then whitespace or the end of the line. A
@@ -353,6 +357,68 @@ follows it. Both rules use it, so a doc line plays the same role in `comment-gre
 * `link_definition`: `[label]:` with an indent of at most 3 and a non-blank label without brackets,
   where the `:` ends the line or is followed by whitespace.
 
+These accept any indent where a docstring section needs it, such as a nested bullet. They stay as
+they are, so the docstring rules don't change with the block-start classifier.
+
+### Block starts
+
+`block_start.rs` is a formal classifier of where a block starts, after [CommonMark
+0.31.2](https://spec.commonmark.org/0.31.2/) and the GFM extensions that rustdoc enables through
+pulldown-cmark: tables, footnotes, strikethrough and task lists. `BlockStart::parse(line,
+preceding)` takes the line's text relative to its container, the list item it is in, and returns
+the block the line opens, if any. `Preceding` says what comes before the line, since that decides
+which blocks can start:
+
+* `NoParagraph`: the first line of a container, or a line after a blank line or another block.
+  Every block can start.
+* `Paragraph`: a paragraph line of the same container. Only a block that
+  `BlockStart::can_interrupt_paragraph` allows ends the paragraph, and a setext heading underline
+  turns it into a heading. Anything else is [paragraph continuation
+  text](https://spec.commonmark.org/0.31.2/#paragraph-continuation-text).
+* `LazyParagraph`: a paragraph line of a list item that the line isn't indented enough to belong
+  to. The line would be a [lazy continuation
+  line](https://spec.commonmark.org/0.31.2/#lazy-continuation-line), so it opens a block of its own
+  container: any list item, but no setext underline, link reference definition, indented code or
+  start condition 7.
+
+The blocks, with the spec section each one follows:
+
+| `BlockStart` | Recognized as | Interrupts a paragraph |
+| ------------ | ------------- | ---------------------- |
+| `AtxHeading` | 1 to 6 `#`, then a space, a tab or the end ([4.2](https://spec.commonmark.org/0.31.2/#atx-headings)) | yes |
+| `FencedCode { fence }` | 3 or more backticks or tildes, no backtick in a backtick fence's info string ([4.5](https://spec.commonmark.org/0.31.2/#fenced-code-blocks)) | yes |
+| `BlockQuote` | `>` ([5.1](https://spec.commonmark.org/0.31.2/#block-quotes)) | yes |
+| `ThematicBreak` | 3 or more of one of `*`, `-`, `_`, with only spaces and tabs ([4.1](https://spec.commonmark.org/0.31.2/#thematic-breaks)) | yes |
+| `SetextUnderline` | `=+` or `-+`, then only spaces and tabs, right after a paragraph line ([4.3](https://spec.commonmark.org/0.31.2/#setext-headings)) | yes, and the paragraph becomes the heading |
+| `BulletItem { content_indent, is_empty }` | `-`, `+` or `*`, then a space, a tab or the end ([5.2](https://spec.commonmark.org/0.31.2/#list-items)) | only if not empty |
+| `OrderedItem { start, content_indent, is_empty }` | 1 to 9 digits, `.` or `)`, then a space, a tab or the end | only if `start` is 1 and not empty |
+| `HtmlBlock { condition }` | start conditions 1 to 7 ([4.6](https://spec.commonmark.org/0.31.2/#html-blocks)) | conditions 1 to 6 |
+| `FootnoteDefinition` | `[^label]:`, as pulldown-cmark recognizes it | yes, in pulldown-cmark |
+| `LinkReferenceDefinition` | `link_definition` ([4.7](https://spec.commonmark.org/0.31.2/#link-reference-definitions)) | no |
+| `IndentedCode` | an indent of 4 columns or more ([4.4](https://spec.commonmark.org/0.31.2/#indented-code-blocks)) | no |
+
+Details:
+
+* Every block but `IndentedCode` allows an indent of up to 3 columns. A tab advances to the next
+  multiple of 4 columns, so `\t# x` is indented code.
+* A thematic break takes precedence over a list item, so `* * *` and `- - -` are breaks. After a
+  paragraph line, a setext underline takes precedence over both, so `---` and `-` are underlines
+  there.
+* A list item's content indent is the column after the marker and its whitespace. With 5 or more
+  columns of whitespace, the content starts one column after the marker, and the rest is indented
+  code. An empty item's content starts one column after the marker too.
+* `HtmlBlockCondition` names the seven conditions: `RawText` (`<pre`, `<script`, `<style`,
+  `<textarea`), `Comment`, `ProcessingInstruction`, `Declaration`, `Cdata`, `BlockTag` (the 62
+  block-level tags of the spec, which pulldown-cmark shares) and `CompleteTag` (a complete open or
+  closing tag, then only whitespace). `HtmlBlockCondition::is_ended_by` applies each one's end
+  condition to a line.
+* A link reference definition is `link_definition`, the same recognizer the docstring rules use. It
+  requires whitespace or the end of the line after the `:`, which CommonMark doesn't. A definition
+  can't interrupt a paragraph, so the difference never changes where a block starts.
+* A table can't be told from one line: it needs its delimiter row. A `|` line opens no block in the
+  classifier. GFM tables can't interrupt a paragraph. pulldown-cmark lets a table whose header row
+  starts with `|` interrupt one, which the one-line classifier can't see.
+
 ## comment-greedy-wrap
 
 The user-facing rule, with an example of every exemption, is in
@@ -362,14 +428,20 @@ pairs of each block that are in the same paragraph, and the fit test runs on eac
 
 ### Fit test
 
-A pair `(L, N)` is a violation when
+A pair `(L, N)` is a violation when, for some `k >= 1`,
 
 ```text
-width(L) + 1 + width(first_word(N)) <= width
+width(L) + 1 + width(first_words(N, k)) <= width
 ```
 
+and the rest of `N` after its first `k` words is empty or opens no block, by `BlockStart::parse`
+with the paragraph's `Preceding`. A rest that opens a block would leave the moved words' line
+followed by a list item, a heading or another block, so the fill would change the Markdown.
+
 `width(L)` is `CommentLine::width`, the rtrimmed width of the whole source line (indent, marker and
-text). `first_word(N)` is `N`'s body up to the first whitespace after its leading whitespace.
+text). `first_words(N, k)` is `N`'s body from its first word to the end of its `k`-th word,
+whitespace included. The diagnostic names the smallest valid `k`, in the `first word` form for 1
+and the `first <k> words` form otherwise.
 
 The diagnostic is at `L`'s marker column. Its anchor span is `L` through `N`, since a change to
 either line can create the violation.
@@ -386,41 +458,60 @@ numbers and always ends a block.
 
 ### Line kinds
 
-Each line's body is its `text` without one leading space. `Body::kind` classifies it, trying these
-kinds in order:
+Each line's body is its `text` without one leading space. `Body::kind(container_indent, preceding)`
+classifies it, trying these kinds in order:
 
 1. `Blank`: empty after trimming.
-2. `Fence`: `Fence::parse` matches.
-3. `Header`: `atx_header` matches.
-4. `TableRow`: starts with `|` after trimming.
-5. `BlockQuote`: starts with `>` after trimming.
-6. `LinkDef`: `link_definition` matches.
-7. `Bullet { content_indent }`: `bullet_marker` matches.
-8. `Tagged`: starts with one of `NOTE`, `TODO`, `FIXME`, `SAFETY`, `XXX`, `HACK`, `WARNING` or
+2. `TableRow`: starts with `|` after trimming.
+3. `LinkDef`: `link_definition` matches the body.
+4. The block that `BlockStart::parse` finds in the body's text after `container_indent`, with
+   `preceding`:
+   * `AtxHeading` is `Header`, and `FencedCode` is `Fence { fence }`.
+   * `BlockQuote`, `ThematicBreak` and `SetextUnderline` keep their names.
+   * `BulletItem` and `OrderedItem` are `Bullet { content_indent }`, with the content indent
+     counted from the start of the body.
+   * `HtmlBlock` is `Html { condition }`.
+   * `FootnoteDefinition` and `LinkReferenceDefinition` are `LinkDef`.
+   * `IndentedCode` falls through, since the paragraph machine treats indented text by its indent.
+5. `Tagged`: starts with one of `NOTE`, `TODO`, `FIXME`, `SAFETY`, `XXX`, `HACK`, `WARNING` or
    `IMPORTANT`, followed by `:`.
-9. `Formula`: a first token of identifier characters, `.`, `:`, `[`, `]`, `(` and `)` that starts
+6. `Formula`: a first token of identifier characters, `.`, `:`, `[`, `]`, `(` and `)` that starts
    with a letter or `_`, then one of `=`, `==`, `!=`, `<=`, `>=`, `+=`, `-=`, `*=`, `/=`, `:=`, `->`
    or `=>` as the second whitespace-separated word, then more text.
-10. `Text`: anything else, including `<https://...>` autolinks and inline HTML.
+7. `Text`: anything else, including `<https://...>` autolinks and inline HTML.
+
+`TableRow`, `LinkDef`, `Tagged` and `Formula` are the rule's own exemptions. They apply whatever
+precedes the line, although in Markdown a table row, a definition, a tag or a formula continues a
+paragraph.
 
 ### Paragraph machine
 
 `ParagraphMachine` walks one block from top to bottom. It is created per block, so its state never
 crosses a block boundary. It keeps:
 
-* `fence_tracker`: the fence that opened the current fenced block, if any.
-* `paragraph`: the current paragraph, if any. It is `Prose { continuation_indent }`, `LinkDef {
-  def_indent }` or `Preformatted`.
+* `open_fence`: the fence that opened the current fenced block, if any.
+* `paragraph`: the current paragraph, if any. It is `Prose { continuation_indent, is_lazy }`,
+  `LinkDef { def_indent }`, `Preformatted` or `Html { condition }`.
 * `list_indents`: the content indents of the list items still open, in increasing order. A list item
   stays open across blank lines, so a loose item's later paragraphs are still prose.
 
-`step` moves the machine to the next line `N` and returns whether `N` continues the previous line's
-paragraph. `N` is joinable only when it is a `Text` line and the current paragraph is `Prose` whose
-`continuation_indent` equals `N`'s indent. Every step also updates the state:
+`step` moves the machine to the next line `N` and returns a `Step`: `N` continues the previous
+line's paragraph, ends it, or underlines it as a setext heading. `joinable_pairs` buffers the pairs
+of the current paragraph and drops them on an underline, so no line of a setext heading is checked.
 
-* A fence line or a line inside a fence ends the paragraph.
+A line at the continuation indent of the current `Prose` paragraph is classified with that indent as
+its container and `Preceding::Paragraph`, or `Preceding::LazyParagraph` if the paragraph `is_lazy`.
+Any other line is classified with `Preceding::NoParagraph`, inside the deepest open list item whose
+content indent is at most the line's indent. `N` is joinable only when it is a `Text` line at the
+continuation indent of a `Prose` paragraph. Every step also updates the state:
+
+* A line inside a fence ends the paragraph, and a matching fence line closes the fence.
+* A line inside an HTML block is raw. The line that meets the block's end condition closes it.
+* `Fence` opens a fence and ends the paragraph.
 * `Blank`, `TableRow` and `BlockQuote` end the paragraph.
-* `Header` ends the paragraph and closes every list item.
+* `ThematicBreak` ends the paragraph and closes the list items deeper than its indent.
+* `Html` opens an HTML block, unless its first line already meets the end condition.
+* `Header` and `SetextUnderline` end the paragraph and close every list item.
 * `Formula` starts a one-line `Preformatted` paragraph, so it is joined with neither neighbor.
 * `LinkDef` starts `LinkDef { def_indent }`. The following `Text` lines indented deeper than
   `def_indent` are its target and are never checked.
@@ -431,6 +522,11 @@ paragraph. `N` is joinable only when it is a `Text` line and the current paragra
   `Prose { continuation_indent: 0 }` and closes every list item. With an indent in `list_indents`,
   it starts `Prose` at that indent and closes the deeper items. With any other indent, it starts
   `Preformatted`.
+
+A `Prose` paragraph that a `Text` or `Tagged` line starts `is_lazy` when the paragraph before it is
+prose in a deeper list item than the line's container. Markdown makes such a line a lazy
+continuation of the item, so a following `2.` starts a sibling item there, while after a paragraph
+of the same container it continues the paragraph.
 
 ### Design notes
 
@@ -454,8 +550,21 @@ A trailing `:` is deliberately not a boundary, in plain and doc comments alike. 
 is written as bullets or as indented, preformatted lines (see [Rejected
 alternatives](#rejected-alternatives)).
 
-`BlockQuote`, `+` and `N)` bullets and `~~~` fences have no use in the y-scope code bases. They stay
-because each is one match arm of CommonMark compatibility and none of them misfires.
+`BlockQuote`, `ThematicBreak`, `SetextUnderline`, `Html`, `+` and `N)` bullets and `~~~` fences have
+no use in the y-scope code bases. They stay because the block-start classifier follows CommonMark,
+and none of them misfires.
+
+The paragraph machine and the fit test share one definition of where a block starts. The machine
+asks whether `N` opens a block after `L`, and the fit test asks whether the rest of `N` would, after
+the same `L`. So a line that the machine joins as continuation text is never made a block by a
+move, and a fill that the rule asks for never changes the rendered structure. Before the classifier,
+the fit test moved only the first word, and Spider's
+`components/spider-storage/src/state/test_utils.rs` had a false positive: moving `` `num_children ``
+up left ``- 1`, in order.``, a list item that splits the code span.
+
+Classification is relative to the open list item, as in CommonMark. A list item indented by 4 or
+more columns from its container is indented text, not a nested item, and starts a `Preformatted`
+paragraph like any other indented text outside a list item.
 
 ## errors-doc
 
@@ -1589,7 +1698,9 @@ fn or comment it belonged to, and the anchor spans cover the rest.
 * Unit tests live in each module's `#[cfg(test)] mod tests`. A test module's `//!` doc names only
   the subject under test, never the cases.
 * Classifiers are tested by tables, such as one test that classifies a sample body of every
-  `LineKind`, including `#544)` and `<https://...>` as `Text`.
+  `LineKind`, including `#544)` and `<https://...>` as `Text`. `markdown/block_start.rs` has a test
+  per construct, each in every `Preceding` it differs in, with the edge cases of the spec: an indent
+  of 3 versus 4 columns, tabs, empty items, `1.` versus `2.`, and condition 6 versus 7 tags.
 * Every `comment-greedy-wrap` exemption has a fixture that isn't flagged and a twin that is. The
   CommonMark-only kinds have only their row in the classification table.
 * Every `errors-doc` finding kind has a minimal fixture that produces it, and a satisfied version
@@ -1713,9 +1824,13 @@ Input:
   hide real misses, such as `// There should be 3 submissions:` followed by a short sentence in
   `components/log-ingestor/tests/test_compression_listener.rs`. The only false positive it prevented
   is a formula line after a colon, which `Formula` exempts on its own.
-* Keeping an `Html` line kind and a hard-break `\` boundary. `Html` misfired on `<https://...>`
-  autolinks, and the only `\` line ending in the y-scope code is in an already preformatted ASCII
-  tree.
+* Keeping a hard-break `\` boundary. The only `\` line ending in the y-scope code is in an already
+  preformatted ASCII tree. An earlier `Html` line kind, matched on a leading `<`, misfired on
+  `<https://...>` autolinks. `Html` is back as the classifier's HTML block start conditions, which
+  autolinks don't meet.
+* Asking for the first word only, and leaving the Markdown check to the reader. A move that turns
+  the rest of the line into a block can't be applied, so the rule would ask for a fill it then
+  rejects, or worse, one that changes the docs.
 * Dropping the `#[cfg(test)]` skip and `--include-tests`. Test fns and test modules are skipped by
   default, and the inconsistency between inline and out-of-line modules is fixed by the parent-file
   lookup instead. Integration test crates under `tests/` are neither, so their helpers stay checked,

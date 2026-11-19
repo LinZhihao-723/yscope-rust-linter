@@ -1,8 +1,14 @@
-//! The line-level Markdown that both rules classify comment and doc lines by: indents, ATX headers,
-//! code fences, list items and link reference definitions.
-//!
-//! Every function takes one line's text after its comment marker and the one space that usually
-//! follows it.
+//! The line-level Markdown that the rules read comment and doc lines by: indents, ATX headers, code
+//! fences, list items and link reference definitions.
+
+/// The deepest indent at which Markdown recognizes the start of a block other than indented code.
+pub const MAX_BLOCK_INDENT: usize = 3;
+
+/// The highest level of an ATX header.
+pub const MAX_HEADER_LEVEL: usize = 6;
+
+/// The most digits that the number of an ordered list item can have.
+pub const MAX_ORDERED_LIST_DIGITS: usize = 9;
 
 /// An ATX header line, such as `# Errors`.
 ///
@@ -55,7 +61,7 @@ impl Fence {
     /// # Returns
     ///
     /// Whether `line` closes the fenced code block that `self` opened.
-    fn is_closed_by(self, line: &str) -> bool {
+    pub fn is_closed_by(self, line: &str) -> bool {
         let trimmed = line.trim();
         Self::parse(trimmed).is_some_and(|closing| {
             closing.marker == self.marker
@@ -221,15 +227,6 @@ pub fn link_definition(line: &str) -> Option<LinkDefinitionLine<'_>> {
             target: target.trim(),
         })
 }
-
-/// The deepest indent at which Markdown recognizes an ATX header or a link reference definition.
-const MAX_BLOCK_INDENT: usize = 3;
-
-/// The highest level of an ATX header.
-const MAX_HEADER_LEVEL: usize = 6;
-
-/// The most digits that the number of an ordered list item can have.
-const MAX_ORDERED_LIST_DIGITS: usize = 9;
 
 /// The shortest run of backticks or tildes that opens a fenced code block.
 const MIN_FENCE_LENGTH: usize = 3;

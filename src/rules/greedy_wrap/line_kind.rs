@@ -1,7 +1,10 @@
 //! Classifying the body of one comment line by the markdown role it plays in its paragraph.
 
 use crate::markdown;
+use crate::markdown::BlockStart;
 use crate::markdown::Fence;
+use crate::markdown::HtmlBlockCondition;
+use crate::markdown::Preceding;
 
 /// The markdown role of one comment line's body.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -9,22 +12,32 @@ pub enum LineKind {
     /// An empty or whitespace-only body.
     Blank,
 
-    /// A code fence: three or more backticks or tildes, as [`Fence::parse`] recognizes it.
-    Fence,
-
-    /// An ATX header, as [`markdown::atx_header`] recognizes it.
-    Header,
-
     /// A table row, starting with `|`.
     TableRow,
+
+    /// A link reference definition, as [`markdown::link_definition`] recognizes it, or a footnote
+    /// definition.
+    LinkDef,
+
+    /// The opening fence of a fenced code block.
+    Fence { fence: Fence },
+
+    /// An ATX header.
+    Header,
 
     /// A block quote, starting with `>`.
     BlockQuote,
 
-    /// A link reference definition, as [`markdown::link_definition`] recognizes it.
-    LinkDef,
+    /// A thematic break, such as `***` or `- - -`.
+    ThematicBreak,
 
-    /// A list item, as [`markdown::bullet_marker`] recognizes it.
+    /// A setext heading underline, such as `===` or `---`, right after a prose line.
+    SetextUnderline,
+
+    /// The first line of an HTML block, such as `<div>`, that opened under `condition`.
+    Html { condition: HtmlBlockCondition },
+
+    /// A list item.
     Bullet {
         /// The column, counted from the start of the body, where the item's text starts.
         content_indent: usize,
@@ -39,6 +52,29 @@ pub enum LineKind {
 
     /// Anything else.
     Text,
+}
+
+impl LineKind {
+    /// # Returns
+    ///
+    /// The kind of a line that opens `block_start` at `container_indent`, or [`None`] for indented
+    /// code, which the paragraph machine tells apart by the line's indent.
+    const fn of_block_start(block_start: BlockStart, container_indent: usize) -> Option<Self> {
+        Some(match block_start {
+            BlockStart::AtxHeading => Self::Header,
+            BlockStart::FencedCode { fence } => Self::Fence { fence },
+            BlockStart::BlockQuote => Self::BlockQuote,
+            BlockStart::ThematicBreak => Self::ThematicBreak,
+            BlockStart::SetextUnderline => Self::SetextUnderline,
+            BlockStart::BulletItem { content_indent, .. }
+            | BlockStart::OrderedItem { content_indent, .. } => Self::Bullet {
+                content_indent: container_indent + content_indent,
+            },
+            BlockStart::HtmlBlock { condition } => Self::Html { condition },
+            BlockStart::FootnoteDefinition | BlockStart::LinkReferenceDefinition => Self::LinkDef,
+            BlockStart::IndentedCode => return None,
+        })
+    }
 }
 
 /// The text of a comment line after its marker, without the one space that usually follows it.
@@ -72,13 +108,6 @@ impl<'text> Body<'text> {
 
     /// # Returns
     ///
-    /// The body's text up to the first whitespace after its leading whitespace.
-    pub fn first_word(self) -> &'text str {
-        self.trimmed().split_whitespace().next().unwrap_or_default()
-    }
-
-    /// # Returns
-    ///
     /// The body's text without leading and trailing whitespace.
     pub fn trimmed(self) -> &'text str {
         self.text.trim()
@@ -91,30 +120,39 @@ impl<'text> Body<'text> {
         self.text
     }
 
-    /// Classifies the body. The kinds are tried in the order [`LineKind`] lists them, and the first
-    /// one that matches wins.
+    /// Classifies the body. The rule's own kinds come first: [`LineKind::Blank`],
+    /// [`LineKind::TableRow`] and [`LineKind::LinkDef`]. Then [`BlockStart::parse`] recognizes the
+    /// Markdown block of the body's text after `container_indent`, by the line that `preceding`
+    /// describes. [`LineKind::Tagged`], [`LineKind::Formula`] and [`LineKind::Text`] follow, in
+    /// this order, and the first kind that matches wins.
+    ///
+    /// `container_indent` is the content indent of the open list item the line is in, or 0 outside
+    /// list items. For a line that may continue a prose paragraph, it is the paragraph's
+    /// continuation indent.
     ///
     /// # Returns
     ///
     /// The body's kind.
-    pub fn kind(self) -> LineKind {
+    ///
+    /// # Panics
+    ///
+    /// Panics if `container_indent` is deeper than the body's indent.
+    pub fn kind(self, container_indent: usize, preceding: Preceding) -> LineKind {
+        assert!(
+            container_indent <= self.indent(),
+            "a line's container indent is at most its indent"
+        );
         let trimmed = self.trimmed();
         if trimmed.is_empty() {
             LineKind::Blank
-        } else if Fence::parse(self.text).is_some() {
-            LineKind::Fence
-        } else if markdown::atx_header(self.text).is_some() {
-            LineKind::Header
         } else if trimmed.starts_with('|') {
             LineKind::TableRow
-        } else if trimmed.starts_with('>') {
-            LineKind::BlockQuote
         } else if markdown::link_definition(self.text).is_some() {
             LineKind::LinkDef
-        } else if let Some(bullet) = markdown::bullet_marker(self.text) {
-            LineKind::Bullet {
-                content_indent: bullet.content_indent,
-            }
+        } else if let Some(kind) = BlockStart::parse(&self.text[container_indent..], preceding)
+            .and_then(|block_start| LineKind::of_block_start(block_start, container_indent))
+        {
+            kind
         } else if is_tagged(trimmed) {
             LineKind::Tagged
         } else if is_formula(trimmed) {
@@ -183,8 +221,6 @@ mod tests {
         let cases = [
             ("", LineKind::Blank),
             ("   ", LineKind::Blank),
-            ("```rust", LineKind::Fence),
-            ("  ~~~", LineKind::Fence),
             ("``not a fence", LineKind::Text),
             ("# Errors", LineKind::Header),
             ("###### Six", LineKind::Header),
@@ -201,12 +237,33 @@ mod tests {
             ("[]:", LineKind::Text),
             ("[`Foo`]:bar", LineKind::Text),
             ("     # Indented", LineKind::Text),
+            ("     - Indented", LineKind::Text),
+            ("***", LineKind::ThematicBreak),
+            ("- - -", LineKind::ThematicBreak),
+            ("---", LineKind::ThematicBreak),
+            ("===", LineKind::Text),
+            (
+                "<div>",
+                LineKind::Html {
+                    condition: HtmlBlockCondition::BlockTag,
+                },
+            ),
+            (
+                "<span>",
+                LineKind::Html {
+                    condition: HtmlBlockCondition::CompleteTag,
+                },
+            ),
+            ("[^1]: A footnote.", LineKind::LinkDef),
+            ("[^1]:A footnote.", LineKind::LinkDef),
             ("[`Foo`] is a type.", LineKind::Text),
             ("* item", LineKind::Bullet { content_indent: 2 }),
             ("   - item", LineKind::Bullet { content_indent: 4 }),
             ("+   item", LineKind::Bullet { content_indent: 4 }),
             ("12. item", LineKind::Bullet { content_indent: 4 }),
             ("1) item", LineKind::Bullet { content_indent: 3 }),
+            ("2. item", LineKind::Bullet { content_indent: 3 }),
+            ("-", LineKind::Bullet { content_indent: 2 }),
             ("1.5 seconds", LineKind::Text),
             ("*emphasis*", LineKind::Text),
             ("--flag", LineKind::Text),
@@ -223,16 +280,97 @@ mod tests {
             ("Plain prose.", LineKind::Text),
         ];
         for (text, kind) in cases {
-            assert_eq!(Body::new(text).kind(), kind, "{text:?}");
+            assert_eq!(
+                Body::new(text).kind(0, Preceding::NoParagraph),
+                kind,
+                "{text:?}"
+            );
+        }
+        for text in ["```rust", "  ~~~"] {
+            assert!(
+                matches!(
+                    Body::new(text).kind(0, Preceding::NoParagraph),
+                    LineKind::Fence { .. }
+                ),
+                "{text:?}"
+            );
         }
     }
 
     #[test]
+    fn only_blocks_that_interrupt_a_paragraph_follow_a_prose_line() {
+        let cases = [
+            ("2. item", LineKind::Text),
+            ("1. item", LineKind::Bullet { content_indent: 3 }),
+            ("- 1`, in order.", LineKind::Bullet { content_indent: 2 }),
+            ("*", LineKind::Text),
+            ("-", LineKind::SetextUnderline),
+            ("---", LineKind::SetextUnderline),
+            ("===", LineKind::SetextUnderline),
+            ("- - -", LineKind::ThematicBreak),
+            ("<span>", LineKind::Text),
+            (
+                "<div>",
+                LineKind::Html {
+                    condition: HtmlBlockCondition::BlockTag,
+                },
+            ),
+            ("# Errors", LineKind::Header),
+            ("> quoted", LineKind::BlockQuote),
+            ("[label]: https://example.com", LineKind::LinkDef),
+            ("| a | b |", LineKind::TableRow),
+            ("NOTE: a note", LineKind::Tagged),
+            ("deadline = now - 900ms", LineKind::Formula),
+            ("Plain prose.", LineKind::Text),
+        ];
+        for (text, kind) in cases {
+            assert_eq!(
+                Body::new(text).kind(0, Preceding::Paragraph),
+                kind,
+                "{text:?}"
+            );
+        }
+        assert_eq!(
+            Body::new("   2. item").kind(2, Preceding::Paragraph),
+            LineKind::Text
+        );
+        assert_eq!(
+            Body::new("2. item").kind(0, Preceding::LazyParagraph),
+            LineKind::Bullet { content_indent: 3 }
+        );
+        assert_eq!(
+            Body::new("===").kind(0, Preceding::LazyParagraph),
+            LineKind::Text
+        );
+    }
+
+    #[test]
+    fn block_starts_are_recognized_inside_the_container() {
+        assert_eq!(
+            Body::new("   - nested").kind(2, Preceding::NoParagraph),
+            LineKind::Bullet { content_indent: 4 }
+        );
+        assert_eq!(
+            Body::new("      - nested").kind(2, Preceding::NoParagraph),
+            LineKind::Bullet { content_indent: 7 }
+        );
+        assert_eq!(
+            Body::new("       - too deep").kind(2, Preceding::NoParagraph),
+            LineKind::Text
+        );
+        assert_eq!(
+            Body::new("       # too deep").kind(2, Preceding::NoParagraph),
+            LineKind::Text
+        );
+        assert_eq!(
+            Body::new("     # Header").kind(2, Preceding::NoParagraph),
+            LineKind::Header
+        );
+    }
+
+    #[test]
     fn body_drops_only_one_leading_space() {
-        let body = Body::new("    indented  word");
-        assert_eq!(body.indent(), 3);
-        assert_eq!(body.first_word(), "indented");
+        assert_eq!(Body::new("    indented  word").indent(), 3);
         assert_eq!(Body::new("no-space").indent(), 0);
-        assert_eq!(Body::new("").first_word(), "");
     }
 }

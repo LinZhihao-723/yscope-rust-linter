@@ -2,7 +2,9 @@
 //! same paragraph.
 
 use crate::lexer::CommentLine;
-use crate::markdown::FenceTracker;
+use crate::markdown::Fence;
+use crate::markdown::HtmlBlockCondition;
+use crate::markdown::Preceding;
 use crate::rules::greedy_wrap::line_kind::Body;
 use crate::rules::greedy_wrap::line_kind::LineKind;
 
@@ -15,6 +17,11 @@ use crate::rules::greedy_wrap::line_kind::LineKind;
 pub struct JoinablePair<'comment> {
     pub line: &'comment CommentLine,
     pub next_line: &'comment CommentLine,
+
+    /// How the paragraph precedes `next_line`: [`Preceding::Paragraph`], or
+    /// [`Preceding::LazyParagraph`] if the paragraph is a lazy continuation of a list item's
+    /// paragraph.
+    pub preceding: Preceding,
 }
 
 /// Splits comment lines into blocks: maximal runs of own-line comments on consecutive lines with
@@ -27,7 +34,8 @@ pub fn blocks(comment_lines: &[CommentLine]) -> impl Iterator<Item = &[CommentLi
     comment_lines.chunk_by(|previous, current| current.continues_block(previous))
 }
 
-/// Walks one block and finds the consecutive lines that belong to the same prose paragraph.
+/// Walks one block and finds the consecutive lines that belong to the same prose paragraph. The
+/// lines of a paragraph that a setext heading underline turns into a heading are not joinable.
 ///
 /// # Returns
 ///
@@ -38,33 +46,65 @@ pub fn joinable_pairs(block: &[CommentLine]) -> Vec<JoinablePair<'_>> {
     };
     let mut paragraph_machine = ParagraphMachine::new();
     paragraph_machine.step(Body::new(&first_line.text));
-    block
-        .iter()
-        .zip(block.iter().skip(1))
-        .filter_map(|(line, next_line)| {
-            paragraph_machine
-                .step(Body::new(&next_line.text))
-                .then_some(JoinablePair { line, next_line })
-        })
-        .collect()
+    let mut joinable_pairs = Vec::new();
+    let mut paragraph_pairs = Vec::new();
+    for (line, next_line) in block.iter().zip(block.iter().skip(1)) {
+        match paragraph_machine.step(Body::new(&next_line.text)) {
+            Step::ContinuesParagraph { preceding } => paragraph_pairs.push(JoinablePair {
+                line,
+                next_line,
+                preceding,
+            }),
+            Step::UnderlinesHeading => paragraph_pairs.clear(),
+            Step::EndsParagraph => joinable_pairs.append(&mut paragraph_pairs),
+        }
+    }
+    joinable_pairs.append(&mut paragraph_pairs);
+    joinable_pairs
+}
+
+/// What one line does to the paragraph of the line before it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Step {
+    /// The line continues the previous line's prose paragraph, which precedes it as `preceding`
+    /// describes.
+    ContinuesParagraph { preceding: Preceding },
+
+    /// The line is a setext heading underline, which turns the previous line's prose paragraph into
+    /// a heading.
+    UnderlinesHeading,
+
+    /// The line ends the previous line's paragraph, if any, or belongs to no prose paragraph.
+    EndsParagraph,
 }
 
 /// The paragraph that the latest line of a block belongs to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Paragraph {
     /// Filled text, whose continuation lines are indented by `continuation_indent`.
-    Prose { continuation_indent: usize },
+    Prose {
+        continuation_indent: usize,
+
+        /// Whether the paragraph's first line is a lazy continuation line of a list item's
+        /// paragraph: a text line, right after it, in an outer container.
+        is_lazy: bool,
+    },
 
     /// A link reference definition, whose continuation lines are indented deeper than `def_indent`.
     LinkDef { def_indent: usize },
 
     /// Indented text outside any list item, such as an aligned table or an indented code block.
     Preformatted,
+
+    /// An HTML block that opened under `condition` and hasn't ended yet.
+    Html { condition: HtmlBlockCondition },
 }
 
 /// The state of the walk over one block.
 struct ParagraphMachine {
-    fence_tracker: FenceTracker,
+    /// The fence of the fenced code block that the latest line is in, if any.
+    open_fence: Option<Fence>,
+
     paragraph: Option<Paragraph>,
 
     /// The content indents of the list items that are still open, in increasing order.
@@ -72,9 +112,9 @@ struct ParagraphMachine {
 }
 
 impl ParagraphMachine {
-    fn new() -> Self {
+    const fn new() -> Self {
         Self {
-            fence_tracker: FenceTracker::default(),
+            open_fence: None,
             paragraph: None,
             list_indents: Vec::new(),
         }
@@ -82,18 +122,52 @@ impl ParagraphMachine {
 
     /// Moves the walk to the next line of the block.
     ///
+    /// A line indented by the continuation indent of the current prose paragraph is classified
+    /// after that paragraph. Any other line is classified where no paragraph precedes it, inside
+    /// the deepest open list item whose content indent is at most the line's indent.
+    ///
     /// # Returns
     ///
-    /// Whether the line continues the previous line's prose paragraph.
-    fn step(&mut self, body: Body<'_>) -> bool {
-        if self.fence_tracker.is_code(body.text()) {
-            self.paragraph = None;
-            return false;
+    /// What the line does to the previous line's paragraph.
+    fn step(&mut self, body: Body<'_>) -> Step {
+        if let Some(open_fence) = self.open_fence {
+            if open_fence.is_closed_by(body.text()) {
+                self.open_fence = None;
+            }
+            return Step::EndsParagraph;
+        }
+        if let Some(Paragraph::Html { condition }) = self.paragraph {
+            if condition.is_ended_by(body.text()) {
+                self.paragraph = None;
+            }
+            return Step::EndsParagraph;
         }
         let indent = body.indent();
-        match body.kind() {
-            LineKind::Fence | LineKind::Blank | LineKind::TableRow | LineKind::BlockQuote => {
+        let kind = match self.paragraph {
+            Some(Paragraph::Prose {
+                continuation_indent,
+                is_lazy,
+            }) if indent == continuation_indent => {
+                body.kind(continuation_indent, prose_preceding(is_lazy))
+            }
+            _ => body.kind(self.container_indent(indent), Preceding::NoParagraph),
+        };
+        let is_lazy = self.is_lazy_continuation(indent);
+        match kind {
+            LineKind::Fence { fence } => {
+                self.open_fence = Some(fence);
                 self.paragraph = None;
+            }
+            LineKind::Blank | LineKind::TableRow | LineKind::BlockQuote => {
+                self.paragraph = None;
+            }
+            LineKind::ThematicBreak => {
+                self.paragraph = None;
+                self.close_list_items_deeper_than(indent);
+            }
+            LineKind::Html { condition } => {
+                self.paragraph =
+                    (!condition.is_ended_by(body.text())).then_some(Paragraph::Html { condition });
             }
             LineKind::Formula => {
                 self.paragraph = Some(Paragraph::Preformatted);
@@ -101,6 +175,11 @@ impl ParagraphMachine {
             LineKind::Header => {
                 self.paragraph = None;
                 self.list_indents.clear();
+            }
+            LineKind::SetextUnderline => {
+                self.paragraph = None;
+                self.list_indents.clear();
+                return Step::UnderlinesHeading;
             }
             LineKind::LinkDef => {
                 self.paragraph = Some(Paragraph::LinkDef { def_indent: indent });
@@ -110,19 +189,23 @@ impl ParagraphMachine {
                 self.list_indents.push(content_indent);
                 self.paragraph = Some(Paragraph::Prose {
                     continuation_indent: content_indent,
+                    is_lazy: false,
                 });
             }
             LineKind::Tagged => {
                 self.paragraph = Some(Paragraph::Prose {
                     continuation_indent: indent,
+                    is_lazy,
                 });
             }
-            LineKind::Text => return self.step_text(indent),
+            LineKind::Text => return self.step_text(indent, is_lazy),
         }
-        false
+        Step::EndsParagraph
     }
 
-    /// Moves the walk to a [`LineKind::Text`] line indented by `indent`.
+    /// Moves the walk to a [`LineKind::Text`] line indented by `indent`. `is_lazy` tells whether
+    /// the line is a lazy continuation line of the current paragraph, if it starts a prose
+    /// paragraph.
     ///
     /// The line continues the current paragraph in these cases:
     ///
@@ -133,29 +216,64 @@ impl ParagraphMachine {
     ///
     /// # Returns
     ///
-    /// Whether the line continues a prose paragraph.
-    fn step_text(&mut self, indent: usize) -> bool {
+    /// What the line does to the previous line's paragraph.
+    fn step_text(&mut self, indent: usize, is_lazy: bool) -> Step {
         match self.paragraph {
             Some(Paragraph::Prose {
                 continuation_indent,
-            }) if indent == continuation_indent => return true,
-            Some(Paragraph::LinkDef { def_indent }) if indent > def_indent => return false,
+                is_lazy,
+            }) if indent == continuation_indent => {
+                return Step::ContinuesParagraph {
+                    preceding: prose_preceding(is_lazy),
+                };
+            }
+            Some(Paragraph::LinkDef { def_indent }) if indent > def_indent => {
+                return Step::EndsParagraph;
+            }
             _ => {}
         }
         self.paragraph = Some(if indent == 0 {
             self.list_indents.clear();
             Paragraph::Prose {
                 continuation_indent: 0,
+                is_lazy,
             }
         } else if self.list_indents.contains(&indent) {
             self.close_list_items_deeper_than(indent);
             Paragraph::Prose {
                 continuation_indent: indent,
+                is_lazy,
             }
         } else {
             Paragraph::Preformatted
         });
-        false
+        Step::EndsParagraph
+    }
+
+    /// # Returns
+    ///
+    /// Whether a line indented by `indent` that starts a prose paragraph is a lazy continuation
+    /// line of the current paragraph: the current paragraph is prose in a list item that the line's
+    /// container is outside of.
+    fn is_lazy_continuation(&self, indent: usize) -> bool {
+        matches!(
+            self.paragraph,
+            Some(Paragraph::Prose { continuation_indent, .. })
+                if self.container_indent(continuation_indent) > self.container_indent(indent)
+        )
+    }
+
+    /// # Returns
+    ///
+    /// The content indent of the deepest open list item that a line indented by `indent` is in, or
+    /// 0 if it is in none.
+    fn container_indent(&self, indent: usize) -> usize {
+        self.list_indents
+            .iter()
+            .rev()
+            .find(|list_indent| **list_indent <= indent)
+            .copied()
+            .unwrap_or_default()
     }
 
     /// Closes the open list items whose content indent is deeper than `indent`.
@@ -163,6 +281,17 @@ impl ParagraphMachine {
         while self.list_indents.last().is_some_and(|last| *last > indent) {
             self.list_indents.pop();
         }
+    }
+}
+
+/// # Returns
+///
+/// How a prose paragraph precedes its next line: lazily if `is_lazy`.
+const fn prose_preceding(is_lazy: bool) -> Preceding {
+    if is_lazy {
+        Preceding::LazyParagraph
+    } else {
+        Preceding::Paragraph
     }
 }
 
@@ -317,6 +446,60 @@ mod tests {
     fn tagged_line_starts_a_new_paragraph() {
         assert_eq!(joinable_lines("// Write outputs\n// NOTE: one type.\n"), []);
         assert_eq!(joinable_lines("// NOTE: a note\n// that wraps.\n"), [1]);
+    }
+
+    #[test]
+    fn line_that_cannot_interrupt_a_paragraph_continues_it() {
+        assert_eq!(joinable_lines("/// In\n/// 2022. Then\n"), [1]);
+        assert_eq!(joinable_lines("/// One\n/// *\n"), [1]);
+        assert_eq!(joinable_lines("/// One\n/// <span>\n"), [1]);
+        assert_eq!(joinable_lines("/// One\n/// 1. Item\n"), []);
+        assert_eq!(joinable_lines("/// One\n/// - Item\n"), []);
+    }
+
+    #[test]
+    fn setext_underline_turns_its_paragraph_into_a_heading() {
+        let heading = "/// A heading\n/// that wraps\n/// ===\n/// Text\n/// wraps.\n";
+        assert_eq!(joinable_lines(heading), [4]);
+        assert_eq!(joinable_lines("/// A heading\n/// ---\n"), []);
+        assert_eq!(joinable_lines("/// ---\n/// Text\n/// wraps.\n"), [2]);
+    }
+
+    #[test]
+    fn thematic_break_ends_the_paragraph() {
+        assert_eq!(
+            joinable_lines("/// Text\n/// * * *\n/// More\n/// text.\n"),
+            [3]
+        );
+        assert_eq!(joinable_lines("/// Text\n/// ***\n"), []);
+    }
+
+    #[test]
+    fn html_block_lines_are_not_joinable_until_the_block_ends() {
+        let block_tag = "/// <div>\n/// Raw\n/// html.\n///\n/// Text\n/// wraps.\n";
+        assert_eq!(joinable_lines(block_tag), [5]);
+        let raw_text = "/// <pre>\n/// Raw\n///\n/// text.\n/// </pre>\n/// Text\n/// wraps.\n";
+        assert_eq!(joinable_lines(raw_text), [6]);
+        let one_line_comment = "/// <!-- comment -->\n/// Text\n/// wraps.\n";
+        assert_eq!(joinable_lines(one_line_comment), [2]);
+    }
+
+    #[test]
+    fn any_list_item_ends_a_lazy_continuation_of_a_list_item() {
+        let lazy = "/// 1. An item\n/// lazy line\n/// 2. Next\n/// item.\n";
+        assert_eq!(joinable_lines(lazy), []);
+        let not_lazy = "/// 1. An item\n///\n/// Paragraph\n/// 2. Not an item.\n";
+        assert_eq!(joinable_lines(not_lazy), [3]);
+    }
+
+    #[test]
+    fn block_starts_are_recognized_relative_to_the_open_list_item() {
+        let nested = "/// * Top\n///      * Nested\n///        wraps.\n";
+        assert_eq!(joinable_lines(nested), [2]);
+        let too_deep = "/// * Top\n///       * Nested\n///         wraps.\n";
+        assert_eq!(joinable_lines(too_deep), []);
+        let indented_code = "// Intro:\n//\n//     - not a list\n//       item.\n";
+        assert_eq!(joinable_lines(indented_code), []);
     }
 
     #[test]

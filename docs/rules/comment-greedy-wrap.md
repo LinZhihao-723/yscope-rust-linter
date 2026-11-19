@@ -1,8 +1,9 @@
 # `comment-greedy-wrap`
 
 Every paragraph of a `//`, `///` or `//!` comment must be filled greedily to the width, which is 100
-columns by default. Each line holds as many words as fit, so a line is flagged when the first word
-of the next line in the same paragraph would still fit at its end.
+columns by default. Each line holds as many words as fit, so a line is flagged when the first words
+of the next line in the same paragraph would still fit at its end, and moving them up keeps the
+Markdown as it is.
 
 The rule only reports under-filled lines. It never rewrites a comment, and it never flags a line for
 being too long.
@@ -32,6 +33,7 @@ fn running_tasks() -> usize {
 ## Contents
 
 * [The fit test](#the-fit-test)
+* [Moves that would change the Markdown](#moves-that-would-change-the-markdown)
 * [Which comments are checked](#which-comments-are-checked)
 * [Comment blocks](#comment-blocks)
 * [Paragraphs inside a block](#paragraphs-inside-a-block)
@@ -40,17 +42,24 @@ fn running_tasks() -> usize {
 
 ## The fit test
 
-A line `L` is flagged when the next line `N` is in the same paragraph and this holds:
+A line `L` is flagged when the next line `N` is in the same paragraph and, for some number `k` of
+at least 1, both of these hold:
 
 ```text
-width(L) + 1 + width(first_word(N)) <= W
+width(L) + 1 + width(first_words(N, k)) <= W
+rest(N, k) is empty, or opens no Markdown block that interrupts a paragraph
 ```
 
 * `width(L)` is the width of the whole source line of `L`, without its trailing whitespace.
-* `first_word(N)` is the text of `N` after its comment marker, up to the first whitespace after its
-  leading whitespace.
+* `first_words(N, k)` is the text of `N` after its comment marker and leading whitespace, up to the
+  end of its `k`-th word. Words are separated by whitespace.
+* `rest(N, k)` is what is left of `N` after those words and the whitespace after them.
 * The `1` is the space that would join the two.
 * `W` is the width, 100 by default.
+
+The diagnostic names the smallest such `k`. Usually that is 1, the next line's first word. See
+[Moves that would change the Markdown](#moves-that-would-change-the-markdown) for the second
+condition.
 
 The test is exact at the width. Here the first line is 95 columns wide, and `as` would bring it to
 98:
@@ -111,6 +120,67 @@ fn f() {
 ```console
 $ yscope-rust-linter --width 11 example.rs
 example.rs:2:5: comment-greedy-wrap: line is 9 columns wide and the next line's first word `x` (1 column) fits within 11; move it up
+```
+
+## Moves that would change the Markdown
+
+Moving words up leaves the rest of the next line at the start of a line. If that rest opens a
+Markdown block that can interrupt a paragraph, the move would split the paragraph and change how
+rustdoc renders it. Such a move is never asked for. Here moving `` `num_children `` would leave
+``- 1`, in order.``, which is a list item, so both words of `` `num_children - `` must move
+together:
+
+```rust
+/// The prepared children for the input bytes `0` to
+/// `num_children - 1`, in order.
+fn children() {}
+```
+
+```console
+$ yscope-rust-linter example.rs
+example.rs:1:1: comment-greedy-wrap: line is 52 columns wide and the next line's first 2 words ``num_children -` (15 columns) fit within 100; move them up
+```
+
+When no number of words both fits and leaves a valid rest, nothing is flagged. Here the first line
+is 86 columns wide, and `` `num_children - `` would bring it to 102:
+
+```rust
+/// The prepared children of [`create_test_prepared_child`] for the input bytes `0` to
+/// `num_children - 1`, in order.
+fn children() {}
+```
+
+These are the blocks that can interrupt a paragraph, and so make a rest invalid. Each marker may be
+indented by up to 3 columns:
+
+* An ATX header: 1 to 6 `#`, then a space, a tab or the end of the line.
+* A code fence: 3 or more backticks or tildes.
+* A block quote: `>`.
+* A thematic break: 3 or more of the same `*`, `-` or `_`, with only spaces and tabs between them.
+* A setext heading underline: a run of `=` or `-` alone, which would turn the paragraph above it
+  into a heading.
+* A bullet with text after its `-`, `+` or `*` and a space or a tab.
+* An ordered list item numbered 1, such as `1.` or `1)`, with text after it.
+* An HTML block that starts with `<pre`, `<script`, `<style`, `<textarea`, `<!--`, `<?`, `<!` and a
+  letter, `<![CDATA[`, or a block-level tag such as `<div>` or `</p>`.
+* A footnote definition: `[^label]:`.
+
+After a lazy continuation line of a list item (see [Bullets](#bullets)), any list item interrupts
+the paragraph too.
+
+Anything else continues the paragraph, so it is a valid rest. That includes a list item numbered
+other than 1, an empty list item, `-1`, `#544`, an inline tag such as `<span>`, a link reference
+definition and a table row:
+
+```rust
+/// The window was resized in
+/// 2024. The new size is kept.
+fn f() {}
+```
+
+```console
+$ yscope-rust-linter example.rs
+example.rs:1:1: comment-greedy-wrap: line is 29 columns wide and the next line's first word `2024.` (5 columns) fits within 100; move it up
 ```
 
 ## Which comments are checked
@@ -214,8 +284,16 @@ Each line's body is its text after the comment marker, without the one space tha
 the marker. The body's indent is its number of leading spaces and tabs. The rule recognizes the
 Markdown structures below by their bodies, in plain comments and doc comments alike.
 
+Where a Markdown block starts follows CommonMark 0.31.2 and the GFM extensions that rustdoc enables.
+A block's marker may be indented by up to 3 columns, counted from the content indent of the list
+item the line is in. With 4 or more, the line opens no block.
+
 Two consecutive lines are in the same paragraph only when the second one is ordinary text at the
-paragraph's continuation indent. Everything else starts something new.
+paragraph's continuation indent. Everything else starts something new. Right after a prose line, a
+line is ordinary text unless it opens a block that can interrupt a paragraph (see [Moves that would
+change the Markdown](#moves-that-would-change-the-markdown)) or is one of the rule's own kinds
+below: a table row, a tag, a formula or a link reference definition. So a line that starts with
+`2024.` continues the paragraph.
 
 ### Blank comment lines
 
@@ -236,8 +314,8 @@ example.rs:3:1: comment-greedy-wrap: line is 32 columns wide and the next line's
 
 ### Code fences
 
-A fence is a line of three or more backticks or tildes, after any indent. The fence lines and every
-line between them are code, which is never checked:
+A fence is a line of three or more backticks or tildes. The fence lines and every line between them
+are code, which is never checked:
 
 ````rust
 /// Parses a config.
@@ -299,13 +377,29 @@ $ yscope-rust-linter example.rs
 example.rs:2:5: comment-greedy-wrap: line is 30 columns wide and the next line's first word `#544,` (5 columns) fits within 100; move it up
 ```
 
+A setext heading, a paragraph followed by an underline of `=` or `-` alone, is a header too. None of
+its lines is checked, and the underline is joined with neither neighbor:
+
+```rust
+/// Configuration
+/// =============
+/// The scheduler reads its
+/// configuration at startup.
+fn f() {}
+```
+
+```console
+$ yscope-rust-linter example.rs
+example.rs:3:1: comment-greedy-wrap: line is 27 columns wide and the next line's first word `configuration` (13 columns) fits within 100; move it up
+```
+
 A header also closes every open list item. See [Indentation changes](#indentation-changes).
 
 ### Bullets
 
 A list item starts with `*`, `-` or `+`, or with 1 to 9 digits followed by `.` or `)`. The marker
-needs at least one space or tab after it. Each list item starts a new paragraph, so neither the line
-before it nor the item before it is joined with it:
+needs a space, a tab or the end of the line after it. A list item starts a new paragraph, so
+neither the line before it nor the item before it is joined with it:
 
 ```rust
 /// The steps are:
@@ -317,8 +411,28 @@ before it nor the item before it is joined with it:
 fn f() {}
 ```
 
-Without whitespace after the marker, the line is prose. `--verbose`, `*emphasis*` and `3.5 seconds`
-are not list items:
+Right after a prose line, only a bullet with text or an ordered item numbered 1 with text starts a
+list item, as in Markdown. Any other line continues the paragraph, as `2024.` does in [Moves that
+would change the Markdown](#moves-that-would-change-the-markdown).
+
+A text line at indent 0 right after a list item's text is a lazy continuation line of the item in
+Markdown, although the rule checks it as a new paragraph. After it, any list item starts a new item:
+
+```rust
+/// 1. The first item, with a lazy
+/// continuation line.
+/// 2. The second item, whose text
+///    ends early.
+fn f() {}
+```
+
+```console
+$ yscope-rust-linter example.rs
+example.rs:3:1: comment-greedy-wrap: line is 34 columns wide and the next line's first word `ends` (4 columns) fits within 100; move it up
+```
+
+Without whitespace or the end of the line after the marker, the line is prose. `--verbose`,
+`*emphasis*` and `3.5 seconds` are not list items:
 
 ```rust
 /// The flag
@@ -423,6 +537,58 @@ A header closes every open list item, so indented text after it is preformatted:
 fn f() {}
 ```
 
+### Thematic breaks
+
+A thematic break is a line of 3 or more of the same `*`, `-` or `_`, with only spaces and tabs
+between them, such as `***` or `- - -`. It ends the paragraph, and the lines after it start a new
+one. A run of `-` alone right after a prose line is a setext heading underline instead (see
+[Headers](#headers)):
+
+```rust
+/// Text before a break.
+/// * * *
+/// Text after the break
+/// is checked.
+fn f() {}
+```
+
+```console
+$ yscope-rust-linter example.rs
+example.rs:3:1: comment-greedy-wrap: line is 24 columns wide and the next line's first word `is` (2 columns) fits within 100; move it up
+```
+
+### HTML blocks
+
+A line that starts an HTML block, such as `<div class="warning">`, `<pre>` or `<!--`, is raw HTML,
+and so are the lines of the block after it. None of them is checked:
+
+* A block that starts with `<pre`, `<script`, `<style` or `<textarea` runs to the line that holds
+  `</pre>`, `</script>`, `</style>` or `</textarea>`.
+* A comment `<!--` runs to the line that holds `-->`, `<?` to `?>`, `<!` and a letter to `>`, and
+  `<![CDATA[` to `]]>`. Each can end on its first line.
+* A block that starts with a block-level tag, such as `<div>` or `</table>`, or with a lone tag on
+  its line, such as `<span>`, runs to the next blank line. A lone tag starts no block right after a
+  prose line.
+
+```rust
+/// <div class="warning">
+/// Raw HTML is not
+/// filled.
+/// </div>
+///
+/// Markdown after the blank line
+/// is checked.
+fn f() {}
+```
+
+```console
+$ yscope-rust-linter example.rs
+example.rs:6:1: comment-greedy-wrap: line is 33 columns wide and the next line's first word `is` (2 columns) fits within 100; move it up
+```
+
+An autolink such as `<https://example.com>` starts no HTML block, and neither does a tag followed
+by text, such as `<b>Note</b>: ...`. Both are prose.
+
 ### Tables
 
 A line whose body starts with `|` is a table row. A table row is never joined with the line before
@@ -446,8 +612,8 @@ A row without the leading `|`, such as `a | b |`, is prose.
 
 ### Block quotes
 
-A line whose body starts with `>` is a block quote line. It is never joined with the line before or
-after it:
+A line whose body starts with `>`, after an indent of up to 3 columns, is a block quote line. It is
+never joined with the line before or after it:
 
 ```rust
 /// > A quoted line that ends
@@ -523,8 +689,9 @@ nothing follows the operator.
 ### Link reference definitions
 
 A link reference definition is a `[label]:` line with an indent of at most 3, where the label isn't
-blank and has no `[` or `]`. The `:` must end the line or be followed by whitespace. The definition
-and its continuation lines, indented deeper than it, are never checked:
+blank and has no `[` or `]`. The `:` must end the line or be followed by whitespace. A footnote
+definition, `[^label]:`, is one too. The definition and its continuation lines, indented deeper than
+it, are never checked:
 
 ```rust
 /// See [`Foo::bar`].
@@ -562,7 +729,10 @@ example.rs:2:5: comment-greedy-wrap: line is 37 columns wide and the next line's
 
 ```text
 <path>:<line>:<column>: comment-greedy-wrap: line is <W(L)> columns wide and the next line's first word `<word>` (<W(word)> columns) fits within <W>; move it up
+<path>:<line>:<column>: comment-greedy-wrap: line is <W(L)> columns wide and the next line's first <k> words `<words>` (<W(words)> columns) fit within <W>; move them up
 ```
+
+The second form names `k` words when moving fewer would leave a rest that opens a Markdown block.
 
 * The line and column point at the comment marker of the under-filled line.
 * A count of 1 reads `1 column`.
@@ -571,9 +741,10 @@ example.rs:2:5: comment-greedy-wrap: line is 37 columns wide and the next line's
 
 To fix it:
 
-* Move the words up from the next line, then check the lines below it: each move can leave room on
-  the next line too.
-* Reflowing the whole paragraph to the width does the same in one step.
+* Move the named words up from the next line, then check the lines below it: each move can leave
+  room on the next line too.
+* Reflowing the whole paragraph to the width does the same in one step, as long as no line of the
+  result starts with a block marker such as `- ` or `1. `.
 * If the lines are short on purpose, give them a structure the rule recognizes: list items, a blank
   comment line, a code fence, a table, or indented (preformatted) lines.
 * If none of these fits, suppress the rule with a reason. See [Suppression
@@ -591,6 +762,8 @@ To fix it:
   `// }`, is prose and may be flagged. Put it in a code fence, indent it, or suppress the rule.
 * A tagged paragraph runs until a boundary. An unrelated sentence right below a `NOTE:` line, with
   no blank line between them, is joined with it.
-* Setext headers, a line followed by `===` or `---`, are not recognized. Use ATX headers (`#`).
+* A line whose indent differs from the paragraph's continuation indent starts a new paragraph,
+  although Markdown may continue the paragraph with it. So an underline indented differently from
+  its paragraph doesn't make a setext heading, and a lazy continuation line isn't joined.
 * Block comments are never checked.
 * After an unterminated literal or block comment, the rest of the file isn't checked.
