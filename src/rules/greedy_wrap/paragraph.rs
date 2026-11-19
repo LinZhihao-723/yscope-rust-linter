@@ -64,7 +64,7 @@ pub fn joinable_pairs(block: &[CommentLine]) -> Vec<JoinablePair<'_>> {
 }
 
 /// What one line does to the paragraph of the line before it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug)]
 enum Step {
     /// The line continues the previous line's prose paragraph, which precedes it as `preceding`
     /// describes.
@@ -98,13 +98,13 @@ enum Paragraph {
 
     /// An HTML block that opened under `condition` and hasn't ended yet.
     Html { condition: HtmlBlockCondition },
+
+    /// A fenced code block that opened with `fence` and hasn't been closed yet.
+    FencedCode { fence: Fence },
 }
 
 /// The state of the walk over one block.
 struct ParagraphMachine {
-    /// The fence of the fenced code block that the latest line is in, if any.
-    open_fence: Option<Fence>,
-
     paragraph: Option<Paragraph>,
 
     /// The content indents of the list items that are still open, in increasing order.
@@ -114,7 +114,6 @@ struct ParagraphMachine {
 impl ParagraphMachine {
     const fn new() -> Self {
         Self {
-            open_fence: None,
             paragraph: None,
             list_indents: Vec::new(),
         }
@@ -130,9 +129,9 @@ impl ParagraphMachine {
     ///
     /// What the line does to the previous line's paragraph.
     fn step(&mut self, body: Body<'_>) -> Step {
-        if let Some(open_fence) = self.open_fence {
-            if open_fence.is_closed_by(body.text()) {
-                self.open_fence = None;
+        if let Some(Paragraph::FencedCode { fence }) = self.paragraph {
+            if fence.is_closed_by(body.text()) {
+                self.paragraph = None;
             }
             return Step::EndsParagraph;
         }
@@ -148,15 +147,14 @@ impl ParagraphMachine {
                 continuation_indent,
                 is_lazy,
             }) if indent == continuation_indent => {
-                body.kind(continuation_indent, prose_preceding(is_lazy))
+                body.kind(continuation_indent, Preceding::paragraph(is_lazy))
             }
             _ => body.kind(self.container_indent(indent), Preceding::NoParagraph),
         };
         let is_lazy = self.is_lazy_continuation(indent);
         match kind {
             LineKind::Fence { fence } => {
-                self.open_fence = Some(fence);
-                self.paragraph = None;
+                self.paragraph = Some(Paragraph::FencedCode { fence });
             }
             LineKind::Blank | LineKind::TableRow | LineKind::BlockQuote => {
                 self.paragraph = None;
@@ -224,7 +222,7 @@ impl ParagraphMachine {
                 is_lazy,
             }) if indent == continuation_indent => {
                 return Step::ContinuesParagraph {
-                    preceding: prose_preceding(is_lazy),
+                    preceding: Preceding::paragraph(is_lazy),
                 };
             }
             Some(Paragraph::LinkDef { def_indent }) if indent > def_indent => {
@@ -281,17 +279,6 @@ impl ParagraphMachine {
         while self.list_indents.last().is_some_and(|last| *last > indent) {
             self.list_indents.pop();
         }
-    }
-}
-
-/// # Returns
-///
-/// How a prose paragraph precedes its next line: lazily if `is_lazy`.
-const fn prose_preceding(is_lazy: bool) -> Preceding {
-    if is_lazy {
-        Preceding::LazyParagraph
-    } else {
-        Preceding::Paragraph
     }
 }
 
@@ -463,6 +450,9 @@ mod tests {
         assert_eq!(joinable_lines(heading), [4]);
         assert_eq!(joinable_lines("/// A heading\n/// ---\n"), []);
         assert_eq!(joinable_lines("/// ---\n/// Text\n/// wraps.\n"), [2]);
+        let in_list_item =
+            "/// * Item\n///\n///   Heading\n///   ===\n///\n///   indented\n///   text\n";
+        assert_eq!(joinable_lines(in_list_item), []);
     }
 
     #[test]
@@ -472,6 +462,8 @@ mod tests {
             [3]
         );
         assert_eq!(joinable_lines("/// Text\n/// ***\n"), []);
+        let after_list_item = "/// * Item\n/// ***\n///   indented\n///   text\n";
+        assert_eq!(joinable_lines(after_list_item), []);
     }
 
     #[test]
@@ -490,6 +482,8 @@ mod tests {
         assert_eq!(joinable_lines(lazy), []);
         let not_lazy = "/// 1. An item\n///\n/// Paragraph\n/// 2. Not an item.\n";
         assert_eq!(joinable_lines(not_lazy), [3]);
+        let lazy_tagged = "/// 1. An item\n/// NOTE: lazy\n/// 2. Next\n/// item.\n";
+        assert_eq!(joinable_lines(lazy_tagged), []);
     }
 
     #[test]

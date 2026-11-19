@@ -448,9 +448,9 @@ example.rs:1:1: comment-greedy-wrap: line is 12 columns wide and the next line's
 
 ### Bullet continuations
 
-A list item's content indent is the column where its text starts, counted from the start of the
-body. A text line at exactly that indent continues the item, and that pair is checked. This holds
-for nested and ordered items too:
+A list item's content indent is the number of characters before its text, counted from the start of
+the body. Like the body's indent, it counts a tab as one. A text line at exactly that indent
+continues the item, and that pair is checked. This holds for nested and ordered items too:
 
 ```rust
 /// * A bullet whose text ends

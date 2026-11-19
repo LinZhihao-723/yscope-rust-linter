@@ -33,8 +33,8 @@ impl Checker {
     /// comments are not part of any paragraph.
     ///
     /// A move that would fill a line to exactly the width gets a hint when the line is in a field
-    /// or parameter list, where rustfmt wraps comments one column early. Only then is the file
-    /// parsed, and a file that fails to parse gets no hint.
+    /// or parameter list, where rustfmt wraps comments one column early. A file that fails to parse
+    /// gets no hint.
     ///
     /// # Returns
     ///
@@ -43,7 +43,7 @@ impl Checker {
     pub fn check(&self, context: &FileContext<'_>) -> Vec<Diagnostic> {
         let underfilled_lines: Vec<_> = paragraph::blocks(context.comment_lines())
             .flat_map(paragraph::joinable_pairs)
-            .filter_map(|pair| UnderfilledLine::find(pair, self.width))
+            .filter_map(|joinable_pair| UnderfilledLine::find(joinable_pair, self.width))
             .collect();
         let early_wrap_lines = underfilled_lines
             .iter()
@@ -56,7 +56,8 @@ impl Checker {
             .map(|underfilled_line| {
                 let is_wrapped_early = underfilled_line.fills_width(self.width)
                     && early_wrap_lines.as_ref().is_some_and(|line_ranges| {
-                        line_ranges.intersects(LineSpan::single(underfilled_line.pair.line.line))
+                        line_ranges
+                            .intersects(LineSpan::single(underfilled_line.joinable_pair.line.line))
                     });
                 underfilled_line.diagnostic(self.width, is_wrapped_early)
             })
@@ -70,7 +71,7 @@ impl Checker {
 ///
 /// * `'comment` - The lifetime of the comment lines.
 struct UnderfilledLine<'comment> {
-    pair: JoinablePair<'comment>,
+    joinable_pair: JoinablePair<'comment>,
 
     /// The number of the next line's leading words in [`Self::moved`].
     num_words: usize,
@@ -91,19 +92,19 @@ impl<'comment> UnderfilledLine<'comment> {
     ///
     /// The under-filled line with the fewest words that make a valid move, or [`None`] if the line
     /// isn't under-filled.
-    fn find(pair: JoinablePair<'comment>, width: Width) -> Option<Self> {
-        let next_text = Body::new(&pair.next_line.text).trimmed();
-        let room = width.columns().checked_sub(pair.line.width + 1)?;
+    fn find(joinable_pair: JoinablePair<'comment>, width: Width) -> Option<Self> {
+        let next_text = Body::new(&joinable_pair.next_line.text).trimmed();
+        let room = width.columns().checked_sub(joinable_pair.line.width + 1)?;
         word_ends(next_text)
             .map(|word_end| next_text.split_at(word_end))
             .take_while(|(moved, _)| moved.chars().count() <= room)
             .enumerate()
             .find(|(_, (_, rest))| {
                 let rest = rest.trim_start();
-                rest.is_empty() || BlockStart::parse(rest, pair.preceding).is_none()
+                rest.is_empty() || BlockStart::parse(rest, joinable_pair.preceding).is_none()
             })
             .map(|(index, (moved, _))| Self {
-                pair,
+                joinable_pair,
                 num_words: index + 1,
                 moved,
             })
@@ -113,7 +114,7 @@ impl<'comment> UnderfilledLine<'comment> {
     ///
     /// Whether the move would make the line exactly `width` columns wide.
     fn fills_width(&self, width: Width) -> bool {
-        self.pair.line.width + 1 + self.moved.chars().count() == width.columns()
+        self.joinable_pair.line.width + 1 + self.moved.chars().count() == width.columns()
     }
 
     /// Builds the line's diagnostic, which names the words to move. With `is_wrapped_early`, it
@@ -132,7 +133,7 @@ impl<'comment> UnderfilledLine<'comment> {
     /// never produces.
     fn diagnostic(self, width: Width, is_wrapped_early: bool) -> Diagnostic {
         let Self {
-            pair: JoinablePair {
+            joinable_pair: JoinablePair {
                 line, next_line, ..
             },
             num_words,
@@ -275,6 +276,22 @@ mod tests {
     }
 
     #[test]
+    fn continuation_of_a_lazy_paragraph_must_not_open_any_list_item() {
+        let source_text = "// 1. An item\n// lazy aaaa\n// x 2. y\n";
+        let messages: Vec<_> = diagnostics(source_text, 100)
+            .iter()
+            .map(|diagnostic| diagnostic.message().to_owned())
+            .collect();
+        assert_eq!(
+            messages,
+            [
+                "line is 12 columns wide and the next line's first 2 words `x 2.` (4 columns) fit \
+                 within 100; move them up"
+            ]
+        );
+    }
+
+    #[test]
     fn continuation_that_opens_no_interrupting_block_is_flagged() {
         for next_line in [
             "// x 2. y",
@@ -302,28 +319,31 @@ mod tests {
 
     #[test]
     fn continuation_that_opens_an_interrupting_block_needs_more_words_moved() {
-        for next_line in [
-            "// x - y",
-            "// x 1. y",
-            "// x # y",
-            "// x > y",
-            "// x ```",
-            "// x ***",
-            "// x ---",
-            "// x ==",
-            "// x <div>",
-            "// x [^1]: y",
+        for (next_line, moved) in [
+            ("// x - y", "x -"),
+            ("// x 1. y", "x 1."),
+            ("// x # y", "x #"),
+            ("// x > y", "x >"),
+            ("// x ```", "x ```"),
+            ("// x ***", "x ***"),
+            ("// x ---", "x ---"),
+            ("// x ==", "x =="),
+            ("// x <div>", "x <div>"),
+            ("// x [^1]: y", "x [^1]:"),
         ] {
             let source_text = format!("// aaaa\n{next_line}\n");
             let messages: Vec<_> = diagnostics(&source_text, 100)
                 .iter()
                 .map(|diagnostic| diagnostic.message().to_owned())
                 .collect();
-            assert_eq!(messages.len(), 1, "{next_line:?}");
-            assert!(
-                messages[0].contains("first 2 words") || messages[0].contains("first 3 words"),
-                "{next_line:?}: {}",
-                messages[0]
+            assert_eq!(
+                messages,
+                [format!(
+                    "line is 7 columns wide and the next line's first 2 words `{moved}` ({} \
+                     columns) fit within 100; move them up",
+                    moved.chars().count()
+                )],
+                "{next_line:?}"
             );
             assert_eq!(diagnostics(&source_text, 9), [], "{next_line:?}");
         }

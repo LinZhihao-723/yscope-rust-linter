@@ -408,9 +408,14 @@ Details:
 * A thematic break takes precedence over a list item, so `* * *` and `- - -` are breaks. After a
   paragraph line, a setext underline takes precedence over both, so `---` and `-` are underlines
   there.
-* A list item's content indent is the column after the marker and its whitespace. With 5 or more
-  columns of whitespace, the content starts one column after the marker, and the rest is indented
-  code. An empty item's content starts one column after the marker too.
+* A list item's content indent is the number of bytes before its text: the indent, the marker and
+  the whitespace after it. With 5 or more columns of whitespace, the content starts one byte after
+  the marker, and the rest is indented code. An empty item's content starts one byte after the
+  marker too.
+* Columns, in which a tab advances to the next multiple of 4, are a `Column` of their own, and only
+  decide which block a line opens. Content indents stay byte counts, since the paragraph machine
+  compares them with the byte indents of later lines and slices lines with them. For `- \titem`, the
+  content indent is 3, although the text starts at column 4.
 * `HtmlBlockCondition` names the seven conditions: `RawText` (`<pre`, `<script`, `<style`,
   `<textarea`), `Comment`, `ProcessingInstruction`, `Declaration`, `Cdata`, `BlockTag` (the 62
   block-level tags of the spec, which pulldown-cmark shares) and `CompleteTag` (a complete open or
@@ -490,8 +495,8 @@ classifies it, trying these kinds in order:
    `preceding`:
    * `AtxHeading` is `Header`, and `FencedCode` is `Fence { fence }`.
    * `BlockQuote`, `ThematicBreak` and `SetextUnderline` keep their names.
-   * `BulletItem` and `OrderedItem` are `Bullet { content_indent }`, with the content indent
-     counted from the start of the body.
+   * `BulletItem` and `OrderedItem` are `Bullet { content_indent }`, with the content indent in
+     bytes, counted from the start of the body.
    * `HtmlBlock` is `Html { condition }`.
    * `FootnoteDefinition` and `LinkReferenceDefinition` are `LinkDef`.
    * `IndentedCode` falls through, since the paragraph machine treats indented text by its indent.
@@ -511,9 +516,8 @@ paragraph.
 `ParagraphMachine` walks one block from top to bottom. It is created per block, so its state never
 crosses a block boundary. It keeps:
 
-* `open_fence`: the fence that opened the current fenced block, if any.
 * `paragraph`: the current paragraph, if any. It is `Prose { continuation_indent, is_lazy }`,
-  `LinkDef { def_indent }`, `Preformatted` or `Html { condition }`.
+  `LinkDef { def_indent }`, `Preformatted`, `Html { condition }` or `FencedCode { fence }`.
 * `list_indents`: the content indents of the list items still open, in increasing order. A list item
   stays open across blank lines, so a loose item's later paragraphs are still prose.
 

@@ -39,7 +39,7 @@ pub enum LineKind {
 
     /// A list item.
     Bullet {
-        /// The column, counted from the start of the body, where the item's text starts.
+        /// The number of bytes before the item's text, counted from the start of the body.
         content_indent: usize,
     },
 

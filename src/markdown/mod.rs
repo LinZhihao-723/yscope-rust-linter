@@ -1,7 +1,4 @@
 //! The line-level Markdown that the rules classify comment and doc lines by.
-//!
-//! Every function takes one line's text after its comment marker and the one space that usually
-//! follows it.
 
 mod block_start;
 mod line;

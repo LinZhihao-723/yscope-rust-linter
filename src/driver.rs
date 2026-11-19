@@ -264,8 +264,15 @@ mod tests {
         let parsable = format!("{source_text}}}\n");
         let diagnostics =
             file_checker(RuleSet::all()).check(Path::new("a.rs"), &parsable, &LineFilter::All);
-        assert_eq!(diagnostics.len(), 1);
-        assert!(diagnostics[0].message().contains("rust-lang/rustfmt#6180"));
+        let messages: Vec<_> = diagnostics.iter().map(Diagnostic::message).collect();
+        assert_eq!(
+            messages,
+            [
+                "line is 97 columns wide and the next line's first word `cc` (2 columns) fits \
+                 within 100; move it up, but rustfmt wraps this comment one column early \
+                 (rust-lang/rustfmt#6180), so reword the paragraph instead"
+            ]
+        );
     }
 
     #[test]

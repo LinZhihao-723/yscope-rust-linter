@@ -33,7 +33,7 @@ pub enum BlockStart {
 
     /// A bullet list item: `-`, `+` or `*`, then a space, a tab or the end of the line.
     BulletItem {
-        /// The column, counted from the start of the line, where the item's text starts.
+        /// The number of bytes before the item's text, counted from the start of the line.
         content_indent: usize,
 
         /// Whether nothing but spaces and tabs follows the marker.
@@ -46,7 +46,7 @@ pub enum BlockStart {
         /// The number the item starts its list with.
         start: u32,
 
-        /// The column, counted from the start of the line, where the item's text starts.
+        /// The number of bytes before the item's text, counted from the start of the line.
         content_indent: usize,
 
         /// Whether nothing but spaces and tabs follows the marker.
@@ -77,8 +77,8 @@ impl BlockStart {
         match preceding {
             Preceding::NoParagraph => Self::parse_opened_block(line),
             Preceding::Paragraph => {
-                let (indent_columns, rest) = split_indent(line);
-                if indent_columns <= MAX_BLOCK_INDENT && is_setext_underline(rest) {
+                let (rest_column, rest) = split_indent(line);
+                if rest_column.index <= MAX_BLOCK_INDENT && is_setext_underline(rest) {
                     return Some(Self::SetextUnderline);
                 }
                 Self::parse_opened_block(line)
@@ -110,7 +110,7 @@ impl BlockStart {
             Self::OrderedItem {
                 start, is_empty, ..
             } => start == 1 && !is_empty,
-            Self::HtmlBlock { condition } => !matches!(condition, HtmlBlockCondition::CompleteTag),
+            Self::HtmlBlock { condition } => condition.can_interrupt_paragraph(),
             Self::LinkReferenceDefinition | Self::IndentedCode => false,
         }
     }
@@ -121,11 +121,11 @@ impl BlockStart {
     ///
     /// The block that `line` opens, or [`None`] if `line` is blank or starts a paragraph.
     fn parse_opened_block(line: &str) -> Option<Self> {
-        let (indent_columns, rest) = split_indent(line);
+        let (rest_column, rest) = split_indent(line);
         if rest.is_empty() {
             return None;
         }
-        if indent_columns > MAX_BLOCK_INDENT {
+        if rest_column.index > MAX_BLOCK_INDENT {
             return Some(Self::IndentedCode);
         }
         let indent = line.len() - rest.len();
@@ -139,7 +139,7 @@ impl BlockStart {
             Some(Self::HtmlBlock { condition })
         } else if is_thematic_break(rest) {
             Some(Self::ThematicBreak)
-        } else if let Some(list_item) = list_item(rest, indent, indent_columns) {
+        } else if let Some(list_item) = list_item(rest, indent, rest_column) {
             Some(list_item)
         } else if is_footnote_definition(rest) {
             Some(Self::FootnoteDefinition)
@@ -160,14 +160,18 @@ impl BlockStart {
     /// paragraph, which ends the paragraph. Neither a link reference definition, indented code nor
     /// an HTML block under start condition 7 can.
     const fn can_end_lazy_paragraph(self) -> bool {
-        !matches!(
-            self,
-            Self::LinkReferenceDefinition
-                | Self::IndentedCode
-                | Self::HtmlBlock {
-                    condition: HtmlBlockCondition::CompleteTag
-                }
-        )
+        match self {
+            Self::AtxHeading
+            | Self::FencedCode { .. }
+            | Self::BlockQuote
+            | Self::ThematicBreak
+            | Self::SetextUnderline
+            | Self::BulletItem { .. }
+            | Self::OrderedItem { .. }
+            | Self::FootnoteDefinition => true,
+            Self::HtmlBlock { condition } => condition.can_interrupt_paragraph(),
+            Self::LinkReferenceDefinition | Self::IndentedCode => false,
+        }
     }
 }
 
@@ -185,6 +189,19 @@ pub enum Preceding {
     /// A paragraph line of a list item that the line isn't indented enough to belong to. The line
     /// is a lazy continuation line of the paragraph unless it opens a block of its own container.
     LazyParagraph,
+}
+
+impl Preceding {
+    /// # Returns
+    ///
+    /// How a prose paragraph precedes its next line: lazily if `is_lazy`.
+    pub const fn paragraph(is_lazy: bool) -> Self {
+        if is_lazy {
+            Self::LazyParagraph
+        } else {
+            Self::Paragraph
+        }
+    }
 }
 
 /// The start conditions of an HTML block, numbered 1 to 7 in CommonMark.
@@ -243,6 +260,22 @@ impl HtmlBlockCondition {
             Self::Declaration => line.contains('>'),
             Self::Cdata => line.contains("]]>"),
             Self::BlockTag | Self::CompleteTag => is_blank(line),
+        }
+    }
+
+    /// # Returns
+    ///
+    /// Whether a block under this condition can start on the line right after a paragraph line:
+    /// under every condition but [`Self::CompleteTag`].
+    const fn can_interrupt_paragraph(self) -> bool {
+        match self {
+            Self::RawText
+            | Self::Comment
+            | Self::ProcessingInstruction
+            | Self::Declaration
+            | Self::Cdata
+            | Self::BlockTag => true,
+            Self::CompleteTag => false,
         }
     }
 
@@ -382,26 +415,48 @@ const MAX_LIST_MARKER_SPACING: usize = 4;
 /// The tab stop that a tab advances the column to a multiple of.
 const TAB_STOP: usize = 4;
 
-/// # Returns
-///
-/// The width in columns of `line`'s leading spaces and tabs, and the rest of `line`.
-fn split_indent(line: &str) -> (usize, &str) {
-    let rest = line.trim_start_matches([' ', '\t']);
-    (columns(&line[..line.len() - rest.len()], 0), rest)
+/// A column of a line, counted from 0 at the start of the line. A tab advances to the next multiple
+/// of [`TAB_STOP`], and any other character takes one column.
+#[derive(Debug, Clone, Copy)]
+struct Column {
+    index: usize,
+}
+
+impl Column {
+    /// The column that a line starts at.
+    const START: Self = Self { index: 0 };
+
+    /// # Returns
+    ///
+    /// The column right after `text` when `text` starts at this column.
+    fn after(self, text: &str) -> Self {
+        let index = text.chars().fold(self.index, |index, current| {
+            if current == '\t' {
+                index + TAB_STOP - index % TAB_STOP
+            } else {
+                index + 1
+            }
+        });
+        Self { index }
+    }
+
+    /// # Returns
+    ///
+    /// The number of columns that `text` spans when it starts at this column.
+    fn width_of(self, text: &str) -> usize {
+        self.after(text).index - self.index
+    }
 }
 
 /// # Returns
 ///
-/// The number of columns that `whitespace` spans when it starts at `start_column`. A tab advances
-/// to the next multiple of [`TAB_STOP`], and any other character takes one column.
-fn columns(whitespace: &str, start_column: usize) -> usize {
-    whitespace.chars().fold(start_column, |column, current| {
-        if current == '\t' {
-            column + TAB_STOP - column % TAB_STOP
-        } else {
-            column + 1
-        }
-    }) - start_column
+/// A tuple containing:
+///
+/// * The column where `line`'s leading spaces and tabs end.
+/// * The rest of `line`.
+fn split_indent(line: &str) -> (Column, &str) {
+    let rest = line.trim_start_matches([' ', '\t']);
+    (Column::START.after(&line[..line.len() - rest.len()]), rest)
 }
 
 /// # Returns
@@ -451,13 +506,22 @@ fn is_setext_underline(rest: &str) -> bool {
 }
 
 /// Recognizes a list item in `rest`, the part of a line after its `indent` leading bytes, which
-/// span `indent_columns` columns.
+/// starts at `rest_column`.
 ///
 /// # Returns
 ///
 /// The [`BlockStart::BulletItem`] or [`BlockStart::OrderedItem`] that `rest` starts, or [`None`] if
 /// it starts no list item.
-fn list_item(rest: &str, indent: usize, indent_columns: usize) -> Option<BlockStart> {
+///
+/// # Panics
+///
+/// Panics if the ordered list marker's digits don't parse as a `u32`, which
+/// [`MAX_ORDERED_LIST_DIGITS`] rules out.
+fn list_item(rest: &str, indent: usize, rest_column: Column) -> Option<BlockStart> {
+    const _: () = assert!(
+        MAX_ORDERED_LIST_DIGITS <= u32::MAX.ilog10() as usize,
+        "every ordered list number of at most `MAX_ORDERED_LIST_DIGITS` digits fits in a `u32`"
+    );
     let num_digits = rest.chars().take_while(char::is_ascii_digit).count();
     let (marker_length, start) = if rest.starts_with(['-', '+', '*']) {
         (1, None)
@@ -466,7 +530,7 @@ fn list_item(rest: &str, indent: usize, indent_columns: usize) -> Option<BlockSt
     {
         let start = rest[..num_digits]
             .parse()
-            .expect("at most 9 decimal digits fit in a `u32`");
+            .expect("at most `MAX_ORDERED_LIST_DIGITS` decimal digits fit in a `u32`");
         (num_digits + 1, Some(start))
     } else {
         return None;
@@ -478,12 +542,12 @@ fn list_item(rest: &str, indent: usize, indent_columns: usize) -> Option<BlockSt
         return None;
     }
     let is_empty = content.is_empty();
-    let spacing_length =
-        if is_empty || columns(spacing, indent_columns + marker_length) > MAX_LIST_MARKER_SPACING {
-            1
-        } else {
-            spacing.len()
-        };
+    let spacing_column = rest_column.after(&rest[..marker_length]);
+    let spacing_length = if is_empty || spacing_column.width_of(spacing) > MAX_LIST_MARKER_SPACING {
+        1
+    } else {
+        spacing.len()
+    };
     let content_indent = indent + marker_length + spacing_length;
     Some(start.map_or(
         BlockStart::BulletItem {
@@ -599,7 +663,7 @@ fn skip_spaces_and_tabs(bytes: &[u8], start: usize) -> usize {
 /// # Returns
 ///
 /// The index of the first byte at or after `start` that doesn't satisfy `predicate`.
-fn scan_while(bytes: &[u8], start: usize, predicate: impl Fn(u8) -> bool) -> usize {
+fn scan_while(bytes: &[u8], start: usize, mut predicate: impl FnMut(u8) -> bool) -> usize {
     bytes
         .get(start..)
         .and_then(|tail| tail.iter().position(|current| !predicate(*current)))
@@ -1052,5 +1116,54 @@ mod tests {
             both_contexts("\tlet a = 1;"),
             (Some(BlockStart::IndentedCode), None)
         );
+    }
+
+    #[test]
+    fn list_item_content_indent_is_the_byte_offset_of_the_item_text() {
+        for line in ["- \titem", "*\titem", "1.\titem", "  1)  \titem"] {
+            let Some(
+                BlockStart::BulletItem { content_indent, .. }
+                | BlockStart::OrderedItem { content_indent, .. },
+            ) = BlockStart::parse(line, Preceding::NoParagraph)
+            else {
+                panic!("{line:?} starts a list item");
+            };
+            assert_eq!(&line[content_indent..], "item", "{line:?}");
+        }
+    }
+
+    #[test]
+    fn html_blocks_end_by_the_end_condition_of_their_start_condition() {
+        use HtmlBlockCondition::BlockTag;
+        use HtmlBlockCondition::Cdata;
+        use HtmlBlockCondition::Comment;
+        use HtmlBlockCondition::CompleteTag;
+        use HtmlBlockCondition::Declaration;
+        use HtmlBlockCondition::ProcessingInstruction;
+        use HtmlBlockCondition::RawText;
+        let cases = [
+            (RawText, "</PRE>", true),
+            (RawText, "text </script> more", true),
+            (RawText, "<pre>", false),
+            (Comment, "a -->", true),
+            (Comment, "a ->", false),
+            (ProcessingInstruction, "?>", true),
+            (ProcessingInstruction, "? >", false),
+            (Declaration, ">", true),
+            (Declaration, "x", false),
+            (Cdata, "]]>", true),
+            (Cdata, "]>", false),
+            (BlockTag, " \t", true),
+            (BlockTag, "</div>", false),
+            (CompleteTag, "", true),
+            (CompleteTag, "text", false),
+        ];
+        for (condition, line, is_ended) in cases {
+            assert_eq!(
+                condition.is_ended_by(line),
+                is_ended,
+                "{condition:?}: {line:?}"
+            );
+        }
     }
 }
