@@ -4,5 +4,6 @@
 mod check;
 mod line_kind;
 mod paragraph;
+mod rustfmt_lists;
 
 pub use check::Checker;

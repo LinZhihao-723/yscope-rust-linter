@@ -245,6 +245,30 @@ mod tests {
     }
 
     #[test]
+    fn syn_failure_drops_only_the_rustfmt_hint_of_comment_greedy_wrap() {
+        let source_text = format!(
+            "struct S {{\n    /// {}\n    /// cc dd\n    a: u8,\n",
+            "a".repeat(89)
+        );
+        let rule_set: RuleSet = std::iter::once(RuleId::CommentGreedyWrap).collect();
+        let diagnostics =
+            file_checker(rule_set).check(Path::new("a.rs"), &source_text, &LineFilter::All);
+        let messages: Vec<_> = diagnostics.iter().map(Diagnostic::message).collect();
+        assert_eq!(
+            messages,
+            [
+                "line is 97 columns wide and the next line's first word `cc` (2 columns) fits \
+                 within 100; move it up"
+            ]
+        );
+        let parsable = format!("{source_text}}}\n");
+        let diagnostics =
+            file_checker(RuleSet::all()).check(Path::new("a.rs"), &parsable, &LineFilter::All);
+        assert_eq!(diagnostics.len(), 1);
+        assert!(diagnostics[0].message().contains("rust-lang/rustfmt#6180"));
+    }
+
+    #[test]
     fn errors_doc_finding_is_kept_when_any_line_of_its_fn_is_in_range() {
         let source_text = "/// Loads.\n///\n/// # Errors\n///\n/// Returns an error if:\n///\n/// \
                            * Forwards [`save`]'s return values on failure.\nfn f() -> Result<(), \

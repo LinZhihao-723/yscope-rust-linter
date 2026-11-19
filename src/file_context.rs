@@ -96,6 +96,17 @@ impl<'source> FileContext<'source> {
         parsed.as_ref().ok()
     }
 
+    /// Gets the `syn` syntax tree for a rule that can do without it, parsing the file on the first
+    /// call. Unlike [`Self::syntax_tree`], a parse failure is not reported, since the rule skips
+    /// nothing without the tree.
+    ///
+    /// # Returns
+    ///
+    /// The syntax tree, or [`None`] if the file failed to lex or to parse.
+    pub fn optional_syntax_tree(&self) -> Option<&syn::File> {
+        self.parse()?.as_ref().ok()
+    }
+
     /// Decides for the rule `rule_id` whether the file is an out-of-line test module, as
     /// [`TestModuleCache::verdict`] describes. The verdict is computed on the first call.
     ///

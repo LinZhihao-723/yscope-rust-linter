@@ -33,6 +33,7 @@ specification.
   * [Block starts](#block-starts)
 * [comment-greedy-wrap](#comment-greedy-wrap)
   * [Fit test](#fit-test)
+  * [rustfmt hint](#rustfmt-hint)
   * [Blocks](#blocks)
   * [Line kinds](#line-kinds)
   * [Paragraph machine](#paragraph-machine)
@@ -142,7 +143,8 @@ Rules:
 
 * `src/rules/registry.rs`: `RuleId` and the `Rule` enum that dispatches a file to each enabled rule.
 * `src/rules/greedy_wrap/`: `line_kind.rs` classifies lines, `paragraph.rs` splits blocks and runs
-  the paragraph machine, and `check.rs` holds the `Checker` with the fit test.
+  the paragraph machine, `rustfmt_lists.rs` finds the lines that rustfmt wraps one column early, and
+  `check.rs` holds the `Checker` with the fit test.
 * `src/rules/errors_doc/`: `items.rs` (item walk), `errors_section.rs` (section parsing),
   `symbol.rs` (matching), `file_index.rs` (per-file index), `body.rs` (body scan), `pass_through.rs`
   (helper pass-through), `macros.rs` (macro handling), `known_apis.rs` (library API tables) and
@@ -218,6 +220,8 @@ enabled rule:
 
 * `comment_lines()`: the lexed comment lines without the suppression candidates.
 * `syntax_tree(rule_id)`: the `syn::File`, parsed on the first call and kept in a `OnceCell`.
+* `optional_syntax_tree()`: the same tree for a rule that can do without it. A parse failure records
+  nothing, so it never adds a `parse-error`.
 * `is_test_module(rule_id)`: whether the file is an [out-of-line test
   module](#out-of-line-test-modules), decided on the first call with the run's `TestModuleCache`.
 
@@ -242,7 +246,7 @@ The rules are listed in `RuleId::ALL` order, with `is`/`checks` for one rule. A 
 
 A file is parsed at most once, and not at all when no enabled rule needs the tree and no
 `allow-item` needs its items. So a `comment-greedy-wrap`-only run parses only the files that have an
-`allow-item`.
+`allow-item` or a [move that fills a line to the width](#rustfmt-hint).
 
 After the lex failure, the comment rule and the suppressions work on the comments lexed before it.
 
@@ -445,6 +449,24 @@ and the `first <k> words` form otherwise.
 
 The diagnostic is at `L`'s marker column. Its anchor span is `L` through `N`, since a change to
 either line can create the violation.
+
+### rustfmt hint
+
+Nightly rustfmt wraps the comments in a vertical list of fields or parameters one column early
+([rust-lang/rustfmt#6180](https://github.com/rust-lang/rustfmt/issues/6180)): its
+`rewrite_aligned_items_inner` reserves a column for the separator. A line filled to exactly the
+width there is wrapped again by rustfmt, so the rule and rustfmt can't both be satisfied, and the
+paragraph has to be reworded. The rule stays strict at the width everywhere, but its message says
+so.
+
+`Checker::check` first finds every under-filled line. Only if some move fills a line to exactly the
+width does it ask for `optional_syntax_tree`, and `rustfmt_lists::early_wrap_lines` collects the
+lines strictly between the delimiters of every `FieldsNamed`, `FieldsUnnamed` and fn `Signature`
+parameter list. These cover the fields of structs, unions and enum variants, named and tuple, and
+the parameters of fns, methods and trait method declarations, including plain `//` comments and a
+comment after the last field. A diagnostic whose move fills its line to the width, on a line in
+those ranges, gets the hint. A file that fails to parse gets no hint and no `parse-error`. Comments
+inside array literals, which rustfmt wraps early too, get no hint.
 
 ### Blocks
 

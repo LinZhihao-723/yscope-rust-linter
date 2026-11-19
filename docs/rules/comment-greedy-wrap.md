@@ -38,6 +38,7 @@ fn running_tasks() -> usize {
 * [Comment blocks](#comment-blocks)
 * [Paragraphs inside a block](#paragraphs-inside-a-block)
 * [The diagnostic and how to fix it](#the-diagnostic-and-how-to-fix-it)
+* [Running with rustfmt](#running-with-rustfmt)
 * [Known limits](#known-limits)
 
 ## The fit test
@@ -733,6 +734,8 @@ example.rs:2:5: comment-greedy-wrap: line is 37 columns wide and the next line's
 ```
 
 The second form names `k` words when moving fewer would leave a rest that opens a Markdown block.
+Either form can end with a hint that rustfmt wraps the comment one column early. See [Running with
+rustfmt](#running-with-rustfmt).
 
 * The line and column point at the comment marker of the under-filled line.
 * A count of 1 reads `1 column`.
@@ -749,6 +752,53 @@ To fix it:
   comment line, a code fence, a table, or indented (preformatted) lines.
 * If none of these fits, suppress the rule with a reason. See [Suppression
   comments](../suppression.md).
+
+## Running with rustfmt
+
+Run rustfmt first and the linter second, so the linter sees the comments as rustfmt leaves them.
+With `wrap_comments = true`, rustfmt wraps every comment line longer than `comment_width`, but it
+never fills a short line, which is what this rule checks.
+
+Nightly rustfmt wraps some comments one column early, at 99 columns for a `comment_width` of 100
+([rust-lang/rustfmt#6180](https://github.com/rust-lang/rustfmt/issues/6180)). These comments are
+affected, `///` and `//` alike:
+
+* Comments on the fields of a struct, a union or an enum variant, named or tuple.
+* Comments on the parameters of a fn.
+* Comments inside array literals.
+
+Comments on enum variants, items, statements and struct-literal fields are not affected.
+
+In those positions, a line filled to exactly the width is never stable: rustfmt wraps its last word
+down again. The rule doesn't make an exception for them, so the fix is to reword the paragraph until
+no line can take the next word. When a move would fill such a line to exactly the width, the
+message says so:
+
+```rust
+pub struct Config {
+    /// These can be overridden by explicitly supplying the `credentials` field in the
+    /// configuration file.
+    pub credentials: String,
+}
+```
+
+```console
+$ yscope-rust-linter example.rs
+example.rs:2:5: comment-greedy-wrap: line is 86 columns wide and the next line's first word `configuration` (13 columns) fits within 100; move it up, but rustfmt wraps this comment one column early (rust-lang/rustfmt#6180), so reword the paragraph instead
+```
+
+Moving `configuration` up makes the line 100 columns wide, and rustfmt moves it back. A reworded
+paragraph satisfies both:
+
+```rust
+pub struct Config {
+    /// These can be overridden by supplying the `credentials` field in the configuration file.
+    pub credentials: String,
+}
+```
+
+The hint needs the file's syntax tree, so a file that `syn` can't parse gets the diagnostic without
+it. Comments inside array literals get no hint.
 
 ## Known limits
 

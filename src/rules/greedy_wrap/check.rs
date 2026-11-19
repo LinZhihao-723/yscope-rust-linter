@@ -11,6 +11,7 @@ use crate::rules::RuleId;
 use crate::rules::greedy_wrap::line_kind::Body;
 use crate::rules::greedy_wrap::paragraph;
 use crate::rules::greedy_wrap::paragraph::JoinablePair;
+use crate::rules::greedy_wrap::rustfmt_lists;
 
 /// The `comment-greedy-wrap` rule, with the width of a run.
 #[derive(Debug)]
@@ -31,75 +32,142 @@ impl Checker {
     /// Checks that every comment paragraph of one file is filled greedily to the width. Suppression
     /// comments are not part of any paragraph.
     ///
+    /// A move that would fill a line to exactly the width gets a hint when the line is in a field
+    /// or parameter list, where rustfmt wraps comments one column early. Only then is the file
+    /// parsed, and a file that fails to parse gets no hint.
+    ///
     /// # Returns
     ///
     /// A `comment-greedy-wrap` diagnostic for every line that leaves room for the leading words of
     /// the next line.
     pub fn check(&self, context: &FileContext<'_>) -> Vec<Diagnostic> {
-        paragraph::blocks(context.comment_lines())
+        let underfilled_lines: Vec<_> = paragraph::blocks(context.comment_lines())
             .flat_map(paragraph::joinable_pairs)
-            .filter_map(|pair| underfilled_line_diagnostic(pair, self.width))
+            .filter_map(|pair| UnderfilledLine::find(pair, self.width))
+            .collect();
+        let early_wrap_lines = underfilled_lines
+            .iter()
+            .any(|underfilled_line| underfilled_line.fills_width(self.width))
+            .then(|| context.optional_syntax_tree())
+            .flatten()
+            .map(rustfmt_lists::early_wrap_lines);
+        underfilled_lines
+            .into_iter()
+            .map(|underfilled_line| {
+                let is_wrapped_early = underfilled_line.fills_width(self.width)
+                    && early_wrap_lines.as_ref().is_some_and(|line_ranges| {
+                        line_ranges.intersects(LineSpan::single(underfilled_line.pair.line.line))
+                    });
+                underfilled_line.diagnostic(self.width, is_wrapped_early)
+            })
             .collect()
     }
 }
 
-/// Applies the fit test to one joinable pair: the line is under-filled if the next line's first `k`
-/// words, for some `k` of at least 1, would still end within `width` columns after one space, and
-/// what is left of the next line is a valid continuation. It is valid when it is empty or opens no
-/// Markdown block that interrupts a paragraph, so the move can't turn it into a list item, a
-/// heading or another block.
+/// A line that leaves room for the leading words of the next line of its paragraph.
 ///
-/// The diagnostic names the fewest words that make a valid move. It points at the line's marker,
-/// and its anchor span covers both lines, since a change to either can create the violation.
+/// # Type Parameters
 ///
-/// # Returns
-///
-/// A diagnostic if the line is under-filled, or [`None`] otherwise.
-///
-/// # Panics
-///
-/// Panics if the pair's next line comes before its line, which [`paragraph::joinable_pairs`] never
-/// produces.
-fn underfilled_line_diagnostic(pair: JoinablePair<'_>, width: Width) -> Option<Diagnostic> {
-    let JoinablePair {
-        line,
-        next_line,
-        preceding,
-    } = pair;
-    let next_text = Body::new(&next_line.text).trimmed();
-    let room = width.columns().checked_sub(line.width + 1)?;
-    let (num_words, moved) = word_ends(next_text)
-        .map(|word_end| next_text.split_at(word_end))
-        .take_while(|(moved, _)| moved.chars().count() <= room)
-        .enumerate()
-        .find(|(_, (_, rest))| {
-            let rest = rest.trim_start();
-            rest.is_empty() || BlockStart::parse(rest, preceding).is_none()
-        })
-        .map(|(index, (moved, _))| (index + 1, moved))?;
-    let moved_width = counted(moved.chars().count(), "column");
-    let message = if num_words == 1 {
-        format!(
-            "line is {} wide and the next line's first word `{moved}` ({moved_width}) fits within \
-             {}; move it up",
-            counted(line.width, "column"),
-            width.columns()
-        )
-    } else {
-        format!(
-            "line is {} wide and the next line's first {num_words} words `{moved}` \
-             ({moved_width}) fit within {}; move them up",
-            counted(line.width, "column"),
-            width.columns()
-        )
-    };
-    let position = Position {
-        line: line.line,
-        column: line.marker_column,
-    };
-    let anchor = LineSpan::new(line.line, next_line.line)
-        .expect("a joinable pair's next line follows its line");
-    Some(Diagnostic::new(RuleId::CommentGreedyWrap.into(), position, message).with_anchor(anchor))
+/// * `'comment` - The lifetime of the comment lines.
+struct UnderfilledLine<'comment> {
+    pair: JoinablePair<'comment>,
+
+    /// The number of the next line's leading words in [`Self::moved`].
+    num_words: usize,
+
+    /// The fewest leading words of the next line that make a valid move, as the next line's text
+    /// holds them.
+    moved: &'comment str,
+}
+
+impl<'comment> UnderfilledLine<'comment> {
+    /// Applies the fit test to one joinable pair: the line is under-filled if the next line's first
+    /// `k` words, for some `k` of at least 1, would still end within `width` columns after one
+    /// space, and what is left of the next line is a valid continuation. It is valid when it is
+    /// empty or opens no Markdown block that interrupts a paragraph, so the move can't turn it into
+    /// a list item, a heading or another block.
+    ///
+    /// # Returns
+    ///
+    /// The under-filled line with the fewest words that make a valid move, or [`None`] if the line
+    /// isn't under-filled.
+    fn find(pair: JoinablePair<'comment>, width: Width) -> Option<Self> {
+        let next_text = Body::new(&pair.next_line.text).trimmed();
+        let room = width.columns().checked_sub(pair.line.width + 1)?;
+        word_ends(next_text)
+            .map(|word_end| next_text.split_at(word_end))
+            .take_while(|(moved, _)| moved.chars().count() <= room)
+            .enumerate()
+            .find(|(_, (_, rest))| {
+                let rest = rest.trim_start();
+                rest.is_empty() || BlockStart::parse(rest, pair.preceding).is_none()
+            })
+            .map(|(index, (moved, _))| Self {
+                pair,
+                num_words: index + 1,
+                moved,
+            })
+    }
+
+    /// # Returns
+    ///
+    /// Whether the move would make the line exactly `width` columns wide.
+    fn fills_width(&self, width: Width) -> bool {
+        self.pair.line.width + 1 + self.moved.chars().count() == width.columns()
+    }
+
+    /// Builds the line's diagnostic, which names the words to move. With `is_wrapped_early`, it
+    /// adds that rustfmt wraps the comment one column early, so the paragraph needs rewording.
+    ///
+    /// The diagnostic points at the line's marker. Its anchor span covers both lines, since a
+    /// change to either can create the violation.
+    ///
+    /// # Returns
+    ///
+    /// The diagnostic.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the pair's next line comes before its line, which [`paragraph::joinable_pairs`]
+    /// never produces.
+    fn diagnostic(self, width: Width, is_wrapped_early: bool) -> Diagnostic {
+        let Self {
+            pair: JoinablePair {
+                line, next_line, ..
+            },
+            num_words,
+            moved,
+        } = self;
+        let moved_width = counted(moved.chars().count(), "column");
+        let mut message = if num_words == 1 {
+            format!(
+                "line is {} wide and the next line's first word `{moved}` ({moved_width}) fits \
+                 within {}; move it up",
+                counted(line.width, "column"),
+                width.columns()
+            )
+        } else {
+            format!(
+                "line is {} wide and the next line's first {num_words} words `{moved}` \
+                 ({moved_width}) fit within {}; move them up",
+                counted(line.width, "column"),
+                width.columns()
+            )
+        };
+        if is_wrapped_early {
+            message.push_str(
+                ", but rustfmt wraps this comment one column early (rust-lang/rustfmt#6180), so \
+                 reword the paragraph instead",
+            );
+        }
+        let position = Position {
+            line: line.line,
+            column: line.marker_column,
+        };
+        let anchor = LineSpan::new(line.line, next_line.line)
+            .expect("a joinable pair's next line follows its line");
+        Diagnostic::new(RuleId::CommentGreedyWrap.into(), position, message).with_anchor(anchor)
+    }
 }
 
 /// # Returns
@@ -258,6 +326,61 @@ mod tests {
                 messages[0]
             );
             assert_eq!(diagnostics(&source_text, 9), [], "{next_line:?}");
+        }
+    }
+
+    /// # Returns
+    ///
+    /// Whether each diagnostic of `source_text` at `columns` has the rustfmt hint.
+    fn rustfmt_hints(source_text: &str, columns: usize) -> Vec<bool> {
+        diagnostics(source_text, columns)
+            .iter()
+            .map(|diagnostic| diagnostic.message().contains("rust-lang/rustfmt#6180"))
+            .collect()
+    }
+
+    #[test]
+    fn move_that_fills_a_field_or_parameter_comment_to_the_width_gets_the_rustfmt_hint() {
+        // Each comment line is 17 columns wide, and ` cc` brings it to 20.
+        let sources = [
+            "struct S {\n    /// aaaa bbbb\n    /// cc dd\n    a: u8,\n}\n",
+            "struct S(\n    /// aaaa bbbb\n    /// cc dd\n    u8,\n);\n",
+            "union U {\n    // aaaa bbbbb\n    // cc dd\n    a: u8,\n}\n",
+            "enum E {\n    V {\n        /// aaaaa\n        /// cc dd\n        a: u8,\n    },\n}\n",
+            "enum E {\n    V(\n        /// aaaaa\n        /// cc dd\n        u8,\n    ),\n}\n",
+            "fn f(\n    /// aaaa bbbb\n    /// cc dd\n    a: u8,\n) {}\n",
+            "trait T {\n    fn f(\n        // aaaaaa\n        // cc dd\n        a: u8,\n    \
+             );\n}\n",
+        ];
+        for source_text in sources {
+            assert_eq!(rustfmt_hints(source_text, 20), [true], "{source_text:?}");
+            assert_eq!(rustfmt_hints(source_text, 21), [false], "{source_text:?}");
+        }
+        let messages: Vec<_> = diagnostics(sources[0], 20)
+            .iter()
+            .map(|diagnostic| diagnostic.message().to_owned())
+            .collect();
+        assert_eq!(
+            messages,
+            [
+                "line is 17 columns wide and the next line's first word `cc` (2 columns) fits \
+                 within 20; move it up, but rustfmt wraps this comment one column early \
+                 (rust-lang/rustfmt#6180), so reword the paragraph instead"
+            ]
+        );
+    }
+
+    #[test]
+    fn move_that_fills_another_comment_to_the_width_gets_no_rustfmt_hint() {
+        let sources = [
+            "enum E {\n    /// aaaa bbbb\n    /// cc dd\n    V { a: u8 },\n}\n",
+            "/// aaaa bbbb ccc\n/// cc dd\nstruct S {\n    a: u8,\n}\n",
+            "fn f() {\n    // aaaa bbbbb\n    // cc dd\n    let s = S {\n        a: 1,\n    \
+             };\n}\n",
+            "struct S {\n    /// aaaa bbbb\n    /// cc dd\n    a: u8,\n\n",
+        ];
+        for source_text in sources {
+            assert_eq!(rustfmt_hints(source_text, 20), [false], "{source_text:?}");
         }
     }
 
