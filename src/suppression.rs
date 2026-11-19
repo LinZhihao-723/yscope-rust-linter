@@ -20,7 +20,7 @@ use std::fmt;
 
 use crate::config::RuleSet;
 use crate::diagnostic::Diagnostic;
-use crate::diagnostic::DiagnosticCode;
+use crate::diagnostic::DiagnosticKind;
 use crate::diagnostic::Position;
 use crate::lexer::CommentLine;
 use crate::lexer::CommentMarker;
@@ -48,7 +48,7 @@ impl Suppression {
     ///
     /// Whether this suppression covers `diagnostic`.
     fn covers(&self, diagnostic: &Diagnostic) -> bool {
-        let Some(rule_id) = diagnostic.code().rule_id() else {
+        let Some(rule_id) = diagnostic.kind().rule_id() else {
             return false;
         };
         if !self.rule_ids.contains(&rule_id) {
@@ -100,7 +100,7 @@ impl Suppression {
                  remove it"
             ),
         };
-        Diagnostic::new(DiagnosticCode::UnusedSuppression, self.position, message)
+        Diagnostic::new(DiagnosticKind::UnusedSuppression, self.position, message)
     }
 }
 
@@ -255,7 +255,8 @@ pub struct ParsedComments {
 ///
 /// # Returns
 ///
-/// The suppressions, the remaining comment lines and the diagnostics of invalid candidates.
+/// The suppressions, the remaining comment lines, the diagnostics of invalid candidates and the
+/// diagnostics of the deprecated rules that valid suppressions name.
 ///
 /// # Panics
 ///
@@ -308,6 +309,10 @@ pub fn parse(comment_lines: Vec<CommentLine>, header_end: Option<Position>) -> P
                 continue;
             }
         };
+        if let Some(invalid) = kind.misplacement(candidate.is_own_line, position, header_end) {
+            parser.reject(invalid, position);
+            continue;
+        }
         parser.deprecated_rules.extend(
             deprecated_rule_ids
                 .into_iter()
@@ -334,21 +339,15 @@ pub fn parse(comment_lines: Vec<CommentLine>, header_end: Option<Position>) -> P
                     scope: Scope::Unit { lines },
                 });
             }
-            SuppressionKind::AllowItem if candidate.is_own_line => {
+            SuppressionKind::AllowItem => {
                 parser.unlocated_items.push(UnlocatedItem {
                     position,
                     rule_ids,
                     target_line: next_unit_start(candidate.line),
                 });
             }
-            SuppressionKind::AllowItem => parser.reject(InvalidSuppression::TrailingItem, position),
             SuppressionKind::AllowStart => parser.open_regions(position, rule_ids),
             SuppressionKind::AllowEnd => parser.close_regions(position, rule_ids),
-            SuppressionKind::AllowFile
-                if header_end.is_some_and(|header_end| position > header_end) =>
-            {
-                parser.reject(InvalidSuppression::MisplacedFile, position);
-            }
             SuppressionKind::AllowFile => parser.suppressions.push(Suppression {
                 position,
                 rule_ids,
@@ -429,6 +428,27 @@ impl SuppressionKind {
 
     /// # Returns
     ///
+    /// Why a suppression of this form at `position` is misplaced: an `allow-item` that isn't on its
+    /// own line, or an `allow-file` after `header_end`. [`None`] if it isn't misplaced.
+    fn misplacement(
+        self,
+        is_own_line: bool,
+        position: Position,
+        header_end: Option<Position>,
+    ) -> Option<InvalidSuppression> {
+        match self {
+            Self::AllowItem if !is_own_line => Some(InvalidSuppression::TrailingItem),
+            Self::AllowFile if header_end.is_some_and(|header_end| position > header_end) => {
+                Some(InvalidSuppression::MisplacedFile)
+            }
+            Self::Allow | Self::AllowItem | Self::AllowStart | Self::AllowEnd | Self::AllowFile => {
+                None
+            }
+        }
+    }
+
+    /// # Returns
+    ///
     /// Whether the form needs a reason, which every form but `allow-end` does.
     const fn needs_reason(self) -> bool {
         !matches!(self, Self::AllowEnd)
@@ -477,7 +497,7 @@ impl Directive {
     /// * [`InvalidSuppression::Syntax`] if the text doesn't have the form's syntax.
     /// * [`InvalidSuppression::UnknownKind`] if the keyword names no form.
     /// * [`InvalidSuppression::NoRuleIds`] if the `(...)` list is empty.
-    /// * [`InvalidSuppression::Selector`] if the list names a meta code or an unknown rule.
+    /// * [`InvalidSuppression::Selector`] if the list names a meta diagnostic or an unknown rule.
     /// * [`InvalidSuppression::MissingReason`] if the form needs a reason and the reason is empty.
     fn parse(text: &str) -> Result<Self, InvalidSuppression> {
         let directive = text
@@ -560,7 +580,7 @@ enum InvalidSuppression {
     /// The `(...)` list is empty.
     NoRuleIds { kind: SuppressionKind },
 
-    /// An ID in the `(...)` list names a meta code, which can't be suppressed, or no rule.
+    /// An ID in the `(...)` list names a meta diagnostic, which can't be suppressed, or no rule.
     Selector { error: InvalidRuleSelector },
 
     /// The reason after `):` is empty, and form `kind` needs one.
@@ -594,7 +614,7 @@ impl InvalidSuppression {
     /// The `invalid-suppression` diagnostic at `position` that reports this problem.
     fn into_diagnostic(self, position: Position) -> Diagnostic {
         Diagnostic::new(
-            DiagnosticCode::InvalidSuppression,
+            DiagnosticKind::InvalidSuppression,
             position,
             self.to_string(),
         )
@@ -630,7 +650,7 @@ impl fmt::Display for InvalidSuppression {
                 kind.syntax()
             ),
             Self::Selector {
-                error: InvalidRuleSelector::MetaCode { text },
+                error: InvalidRuleSelector::Meta { text },
             } => {
                 write!(formatter, "`{text}` is not a rule and can't be suppressed")
             }
@@ -825,7 +845,7 @@ fn block_last_line(comment_lines: &[CommentLine], start_index: usize) -> usize {
 /// The `unused-suppression` diagnostic at `position` that reports the deprecated rule `rule_id`.
 fn deprecated_rule_diagnostic(rule_id: RuleId, position: Position) -> Diagnostic {
     Diagnostic::new(
-        DiagnosticCode::UnusedSuppression,
+        DiagnosticKind::UnusedSuppression,
         position,
         format!(
             "`{rule_id}` ({}) is deprecated and never reports a finding; remove it from this \
@@ -979,48 +999,6 @@ mod tests {
     }
 
     #[test]
-    fn deprecated_rule_named_in_a_suppression_is_reported_and_suppresses_nothing() {
-        RuleId::ErrorsDoc.with_deprecated(|| {
-            let source_text = concat!(
-                "// yscope-rust-linter: allow-file(DOC): reason\n",
-                "// yscope-rust-linter: allow(errors-doc, comment-greedy-wrap): reason\n",
-                "// A block.\n",
-                "// yscope-rust-linter: allow(DOC002): reason\n",
-                "fn f() {}\n",
-                "// yscope-rust-linter: allow-start(DOC002): reason\n",
-                "// yscope-rust-linter: allow-end(errors-doc)\n",
-            );
-            let parsed = parse_source(source_text);
-            assert_eq!(parsed.invalid_suppressions, []);
-            assert_eq!(covered_spans(&parsed), ["file", "3"]);
-            let deprecated_rules: Vec<_> = parsed
-                .deprecated_rules
-                .iter()
-                .map(|diagnostic| (diagnostic.code(), diagnostic.position().line))
-                .collect();
-            assert_eq!(
-                deprecated_rules,
-                [2, 4, 6, 7].map(|line| (DiagnosticCode::UnusedSuppression, line))
-            );
-            assert_eq!(
-                parsed.deprecated_rules[0].message(),
-                "`errors-doc` (DOC002) is deprecated and never reports a finding; remove it from \
-                 this suppression"
-            );
-            let diagnostics = vec![
-                finding(RuleId::CommentGreedyWrap, 3),
-                finding(RuleId::ErrorsDoc, 5),
-            ];
-            assert_eq!(
-                parsed
-                    .suppressions
-                    .apply(diagnostics.clone(), &RuleSet::all()),
-                diagnostics[1..]
-            );
-        });
-    }
-
-    #[test]
     fn malformed_suppressions_are_rejected() {
         let cases = [
             (
@@ -1056,7 +1034,7 @@ mod tests {
             (
                 " yscope-rust-linter: allow(parse-error): why",
                 InvalidSuppression::Selector {
-                    error: InvalidRuleSelector::MetaCode {
+                    error: InvalidRuleSelector::Meta {
                         text: "parse-error".to_owned(),
                     },
                 },
@@ -1064,7 +1042,7 @@ mod tests {
             (
                 " yscope-rust-linter: allow(errors-doc, LNT): why",
                 InvalidSuppression::Selector {
-                    error: InvalidRuleSelector::MetaCode {
+                    error: InvalidRuleSelector::Meta {
                         text: "LNT".to_owned(),
                     },
                 },
@@ -1089,6 +1067,17 @@ mod tests {
         for (text, expected) in cases {
             assert_eq!(rule_ids(text), Err(expected), "{text:?}");
         }
+    }
+
+    #[test]
+    fn meta_code_in_a_suppression_is_reported_as_not_suppressible() {
+        assert_eq!(
+            invalid("// yscope-rust-linter: allow(LNT001): reason\nfn f() {}\n"),
+            [(
+                1,
+                "`LNT001` is not a rule and can't be suppressed".to_owned()
+            )]
+        );
     }
 
     #[test]
@@ -1141,7 +1130,7 @@ mod tests {
             finding(RuleId::CommentGreedyWrap, 3),
             finding(RuleId::ErrorsDoc, 3),
             Diagnostic::new(
-                DiagnosticCode::ParseError,
+                DiagnosticKind::ParseError,
                 Position { line: 2, column: 1 },
                 "bad".to_owned(),
             ),
@@ -1169,13 +1158,13 @@ mod tests {
             "    .await?; // yscope-rust-linter: allow(errors-doc): the `?` line\n",
         );
         let diagnostics = vec![finding(RuleId::ErrorsDoc, 3)];
-        let codes: Vec<_> = parse_source(source_text)
+        let kinds: Vec<_> = parse_source(source_text)
             .suppressions
             .apply(diagnostics, &RuleSet::all())
             .iter()
-            .map(|diagnostic| (diagnostic.code(), diagnostic.position().line))
+            .map(|diagnostic| (diagnostic.kind(), diagnostic.position().line))
             .collect();
-        assert_eq!(codes, [(DiagnosticCode::UnusedSuppression, 2)]);
+        assert_eq!(kinds, [(DiagnosticKind::UnusedSuppression, 2)]);
     }
 
     #[test]
@@ -1184,8 +1173,8 @@ mod tests {
         let unused = parse_source(source_text)
             .suppressions
             .apply(Vec::new(), &RuleSet::all());
-        let codes: Vec<_> = unused.iter().map(Diagnostic::code).collect();
-        assert_eq!(codes, [DiagnosticCode::UnusedSuppression]);
+        let kinds: Vec<_> = unused.iter().map(Diagnostic::kind).collect();
+        assert_eq!(kinds, [DiagnosticKind::UnusedSuppression]);
 
         let rule_set: RuleSet = std::iter::once(RuleId::CommentGreedyWrap).collect();
         assert_eq!(
@@ -1334,12 +1323,12 @@ mod tests {
             .suppressions
             .reject_items("the file failed to parse")
             .iter()
-            .map(|diagnostic| (diagnostic.code(), diagnostic.message().to_owned()))
+            .map(|diagnostic| (diagnostic.kind(), diagnostic.message().to_owned()))
             .collect();
         assert_eq!(
             invalid,
             [(
-                DiagnosticCode::InvalidSuppression,
+                DiagnosticKind::InvalidSuppression,
                 "can't locate the item of this `allow-item` suppression: the file failed to parse"
                     .to_owned()
             )]

@@ -1,14 +1,12 @@
 //! The registry of the lint rules: their names, codes and deprecation states, the selectors that
 //! name them, and the enabled rules that a run dispatches each file to.
 
-#[cfg(test)]
-use std::cell::Cell;
 use std::fmt;
 use std::str::FromStr;
 
 use crate::config::LintConfig;
 use crate::diagnostic::Diagnostic;
-use crate::diagnostic::DiagnosticCode;
+use crate::diagnostic::DiagnosticKind;
 use crate::file_context::FileContext;
 use crate::rules::errors_doc;
 use crate::rules::greedy_wrap;
@@ -67,43 +65,7 @@ impl RuleId {
     /// # Returns
     ///
     /// Whether the rule is deprecated.
-    #[cfg(not(test))]
     pub const fn is_deprecated(self) -> bool {
-        self.is_registered_as_deprecated()
-    }
-
-    /// Decides as the non-test build does, except that [`Self::with_deprecated`] can mark the rule
-    /// deprecated.
-    ///
-    /// # Returns
-    ///
-    /// Whether the rule is deprecated.
-    #[cfg(test)]
-    pub fn is_deprecated(self) -> bool {
-        DEPRECATED_FOR_TEST.get() == Some(self) || self.is_registered_as_deprecated()
-    }
-
-    /// Runs `f` with this rule marked deprecated on the current thread.
-    ///
-    /// # Type Parameters
-    ///
-    /// * `ReturnType` - The type that `f` returns.
-    ///
-    /// # Returns
-    ///
-    /// The return value of `f`.
-    #[cfg(test)]
-    pub fn with_deprecated<ReturnType>(self, f: impl FnOnce() -> ReturnType) -> ReturnType {
-        let previous = DEPRECATED_FOR_TEST.replace(Some(self));
-        let result = f();
-        DEPRECATED_FOR_TEST.set(previous);
-        result
-    }
-
-    /// # Returns
-    ///
-    /// Whether the registry marks the rule deprecated.
-    const fn is_registered_as_deprecated(self) -> bool {
         match self {
             Self::CommentGreedyWrap
             | Self::ErrorsDoc
@@ -121,7 +83,7 @@ impl fmt::Display for RuleId {
 }
 
 /// A set of diagnostic codes, named by the prefix its codes share.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CodeSet {
     /// Comments and docstrings.
     Doc,
@@ -149,7 +111,7 @@ impl CodeSet {
 }
 
 /// A stable diagnostic code: a set prefix and a 3-digit number, such as `DOC003`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Code {
     pub set: CodeSet,
     pub number: u16,
@@ -185,14 +147,11 @@ impl RuleSelector {
     ///
     /// The rules the selector names: its rule, or every rule of its set that isn't deprecated, in
     /// [`RuleId::ALL`] order.
-    pub fn rule_ids(self) -> Vec<RuleId> {
-        match self {
-            Self::Rule(rule_id) => vec![rule_id],
-            Self::Set(set) => RuleId::ALL
-                .into_iter()
-                .filter(|rule_id| rule_id.code().set == set && !rule_id.is_deprecated())
-                .collect(),
-        }
+    pub fn rule_ids(self) -> impl Iterator<Item = RuleId> {
+        RuleId::ALL.into_iter().filter(move |rule_id| match self {
+            Self::Rule(selected) => *rule_id == selected,
+            Self::Set(set) => rule_id.code().set == set && !rule_id.is_deprecated(),
+        })
     }
 }
 
@@ -207,11 +166,11 @@ impl FromStr for RuleSelector {
             return Ok(Self::Rule(rule_id));
         }
         if text == CodeSet::Lnt.prefix()
-            || DiagnosticCode::META
+            || DiagnosticKind::META
                 .iter()
-                .any(|code| code.name() == text || code.code().to_string() == text)
+                .any(|kind| kind.name() == text || kind.code().to_string() == text)
         {
-            return Err(InvalidRuleSelector::MetaCode {
+            return Err(InvalidRuleSelector::Meta {
                 text: text.to_owned(),
             });
         }
@@ -228,8 +187,9 @@ impl FromStr for RuleSelector {
 /// Why a string is not a [`RuleSelector`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InvalidRuleSelector {
-    /// The text names a meta code, or the set of meta codes, which no rule owns.
-    MetaCode { text: String },
+    /// The text names a meta diagnostic, by its name or its code, or the set of meta codes, which
+    /// no rule owns.
+    Meta { text: String },
 
     /// The text is neither a rule name, a code nor a set prefix.
     Unknown { text: String },
@@ -238,7 +198,7 @@ pub enum InvalidRuleSelector {
 impl fmt::Display for InvalidRuleSelector {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::MetaCode { text } => {
+            Self::Meta { text } => {
                 write!(formatter, "`{text}` is not a rule and can't be selected")
             }
             Self::Unknown { text } => {
@@ -325,16 +285,12 @@ impl Rule {
 }
 
 #[cfg(test)]
-thread_local! {
-    static DEPRECATED_FOR_TEST: Cell<Option<RuleId>> = const { Cell::new(None) };
-}
-
-#[cfg(test)]
 mod tests {
     use super::*;
 
     fn selected(text: &str) -> Result<Vec<RuleId>, InvalidRuleSelector> {
-        text.parse::<RuleSelector>().map(RuleSelector::rule_ids)
+        text.parse::<RuleSelector>()
+            .map(|selector| selector.rule_ids().collect())
     }
 
     #[test]
@@ -373,7 +329,7 @@ mod tests {
         ] {
             assert_eq!(
                 selected(text),
-                Err(InvalidRuleSelector::MetaCode {
+                Err(InvalidRuleSelector::Meta {
                     text: text.to_owned()
                 }),
                 "{text:?}"
@@ -419,37 +375,6 @@ mod tests {
             "unknown rule `lnt001`; expected a rule name or code, one of comment-greedy-wrap \
              (DOC001), errors-doc (DOC002), symbol-order (ORG001), trait-params-doc (DOC004), \
              type-params-doc (DOC003), or a set, one of DOC, ORG"
-        );
-    }
-
-    #[test]
-    fn deprecated_rule_is_selectable_by_name_and_code_but_not_by_its_set() {
-        RuleId::ErrorsDoc.with_deprecated(|| {
-            assert!(RuleId::ErrorsDoc.is_deprecated());
-            assert_eq!(selected("errors-doc"), Ok(vec![RuleId::ErrorsDoc]));
-            assert_eq!(selected("DOC002"), Ok(vec![RuleId::ErrorsDoc]));
-            assert_eq!(
-                selected("DOC"),
-                Ok(vec![
-                    RuleId::CommentGreedyWrap,
-                    RuleId::TraitParamsDoc,
-                    RuleId::TypeParamsDoc,
-                ])
-            );
-            assert_eq!(
-                InvalidRuleSelector::Unknown {
-                    text: "x".to_owned()
-                }
-                .to_string(),
-                "unknown rule `x`; expected a rule name or code, one of comment-greedy-wrap \
-                 (DOC001), symbol-order (ORG001), trait-params-doc (DOC004), type-params-doc \
-                 (DOC003), or a set, one of DOC, ORG"
-            );
-        });
-        assert!(
-            RuleId::ALL
-                .into_iter()
-                .all(|rule_id| !rule_id.is_deprecated())
         );
     }
 }

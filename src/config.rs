@@ -28,7 +28,7 @@ pub struct RuleSet {
 impl RuleSet {
     /// # Returns
     ///
-    /// The set of every rule.
+    /// The set of every rule that isn't deprecated.
     pub fn all() -> Self {
         RuleId::ALL.into_iter().collect()
     }
@@ -104,18 +104,5 @@ mod tests {
                 .into_iter()
                 .all(|rule_id| RuleSet::all().contains(rule_id))
         );
-    }
-
-    #[test]
-    fn rule_set_never_enables_a_deprecated_rule() {
-        RuleId::ErrorsDoc.with_deprecated(|| {
-            assert!(!RuleSet::all().contains(RuleId::ErrorsDoc));
-            assert!(RuleSet::all().contains(RuleId::CommentGreedyWrap));
-            let rule_set: RuleSet = [RuleId::ErrorsDoc, RuleId::SymbolOrder]
-                .into_iter()
-                .collect();
-            assert!(!rule_set.contains(RuleId::ErrorsDoc));
-            assert!(rule_set.contains(RuleId::SymbolOrder));
-        });
     }
 }

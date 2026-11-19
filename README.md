@@ -70,6 +70,16 @@ Each diagnostic is one line on stdout, sorted by path, line and column:
 <path>:<line>:<column>: <code> <name>: <message>
 ```
 
+> [!IMPORTANT]
+> The code is new, so a parser of the old output needs updating. The old and new shapes are:
+>
+> ```text
+> <path>:<line>:<column>: <name>: <message>
+> <path>:<line>:<column>: <code> <name>: <message>
+> ```
+>
+> The GitHub annotation title changes from `<name>` to `<code> <name>` in the same way.
+
 For example:
 
 ```text

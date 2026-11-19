@@ -155,33 +155,21 @@ mod tests {
     #[test]
     fn rule_flag_rejects_unknown_values_and_meta_codes() {
         for value in ["nope", "doc003", "LNT001", "parse-error", "LNT"] {
-            assert!(
-                Cli::try_parse_from(["yscope-rust-linter", "--rule", value, "a.rs"]).is_err(),
+            let error = Cli::try_parse_from(["yscope-rust-linter", "--rule", value, "a.rs"])
+                .expect_err("an invalid `--rule` value");
+            assert_eq!(
+                error.kind(),
+                clap::error::ErrorKind::ValueValidation,
                 "{value:?}"
             );
+            let selector_error = value
+                .parse::<RuleSelector>()
+                .expect_err("an invalid selector")
+                .to_string();
+            assert!(
+                error.to_string().contains(&selector_error),
+                "{value:?}: {error}"
+            );
         }
-    }
-
-    #[test]
-    fn deprecated_rule_flag_warns_once_and_enables_nothing() {
-        RuleId::ErrorsDoc.with_deprecated(|| {
-            let cli = parse(&["--rule", "errors-doc", "--rule", "DOC002", "a.rs"]);
-            assert_eq!(
-                cli.warnings(),
-                ["`errors-doc` (DOC002) is deprecated and never runs; remove it from `--rule`"]
-            );
-            assert_eq!(enabled_rules(cli), []);
-
-            let cli = parse(&["--rule", "DOC", "a.rs"]);
-            assert_eq!(cli.warnings(), Vec::<String>::new());
-            assert_eq!(
-                enabled_rules(cli),
-                [
-                    RuleId::CommentGreedyWrap,
-                    RuleId::TraitParamsDoc,
-                    RuleId::TypeParamsDoc,
-                ]
-            );
-        });
     }
 }

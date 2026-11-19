@@ -282,8 +282,8 @@ The naming standard and the deprecation policy are user-facing, in
 
 * `Code` is a `CodeSet` and a number, and displays as `DOC003`. `CodeSet` is `Doc`, `Org` or `Lnt`,
   with its three-letter prefix.
-* `DiagnosticCode::code` gives the code of every diagnostic. A rule's code comes from
-  `RuleId::code`, and the meta codes `LNT001` to `LNT003` from `DiagnosticCode` itself.
+* `DiagnosticKind::code` gives the code of every diagnostic. A rule's code comes from
+  `RuleId::code`, and the meta codes `LNT001` to `LNT003` from `DiagnosticKind` itself.
 * `RuleSelector` is what `--rule` and a suppression name: `Rule(RuleId)`, matched by name or by
   code, or `Set(CodeSet)`, matched by prefix. `RuleSelector::rule_ids` expands a set to its rules
   that aren't deprecated. `FromStr` is case-sensitive, and rejects a meta code, by name, by code or
@@ -300,9 +300,8 @@ The deprecation state is enforced in three places:
   Only the active ones get a `Suppression`, and `suppression::parse` reports each deprecated one as
   an `unused-suppression`, as [Suppression internals](#suppression-internals) describes.
 
-No rule is deprecated today, so tests mark one with `RuleId::with_deprecated`. It exists only in the
-test build: it sets a thread-local that the test build's `RuleId::is_deprecated` also reads. Each
-test runs on its own thread, so the mark can't leak into other tests.
+No rule is deprecated today, so these paths have no unit tests. They are tested through the first
+rule that is deprecated.
 
 ### Adding a rule
 
@@ -312,8 +311,8 @@ test runs on its own thread, so the mark can't leak into other tests.
 2. Take the next free number in the set: one more than the highest code in it, deprecated rules
    included. Never reuse a number.
 3. Add a `RuleId` variant, add it to `RuleId::ALL`, and give it its name in `RuleId::name`, its code
-   in `RuleId::code`, and `false` in `RuleId::is_registered_as_deprecated`. `--rule`, suppression
-   parsing, set selectors and the unknown-rule message pick it up from there.
+   in `RuleId::code`, and `false` in `RuleId::is_deprecated`. `--rule`, suppression parsing, set
+   selectors and the unknown-rule message pick it up from there.
 4. Add the rule's module under `src/rules/`. Its `Checker` holds the rule's settings and cross-file
    state, and its `check` takes the `FileContext` and returns the rule's diagnostics.
 5. Add a `Rule` variant that holds the checker, with its arms in `Rule::new` and `Rule::check`.
@@ -335,11 +334,13 @@ Rule-agnostic helpers belong in `src/syntax/` and `src/doc/`, next to `src/lexer
 
 A rule is never deleted from the registry:
 
-1. Return `true` for it in `RuleId::is_registered_as_deprecated`. Keep its variant, its name and its
-   code, and keep its row in the frozen table.
-2. Delete its checker module and its `Rule` variant. `Rule::new` then has no checker for it, and its
+1. Return `true` for it in `RuleId::is_deprecated`. Keep its variant, its name and its code, and
+   keep its row in the frozen table.
+2. Add tests of the deprecation paths through it: `RuleSet`, set selectors, `Cli::warnings`,
+   `Directive::parse` and `FileChecker::check`.
+3. Delete its checker module and its `Rule` variant. `Rule::new` then has no checker for it, and its
    arm is unreachable, since `RuleSet` never holds a deprecated rule.
-3. Mark it deprecated in the index of `docs/rules/README.md` and in the README, and say on its page
+4. Mark it deprecated in the index of `docs/rules/README.md` and in the README, and say on its page
    what replaced it. Keep the page, since its URL is built from the rule's name.
 
 ## Comment lexer
@@ -1659,9 +1660,11 @@ The suppression forms and their user-facing semantics are in
   reason. It expands the selectors to rules, without duplicates, and splits off the deprecated ones.
   An unknown keyword, an unknown or meta selector, or a missing reason (for every form but
   `allow-end`) is an `InvalidSuppression`.
-* A valid directive that names a deprecated rule gets one `unused-suppression` per deprecated rule,
-  at its comment. If it names only deprecated rules, it becomes no suppression at all, so the
-  placement and region checks of its form don't apply.
+* A misplaced directive, a trailing `allow-item` or an `allow-file` after the header, is invalid
+  before its rules are looked at, so it gets no other diagnostic.
+* A placed directive that names a deprecated rule gets one `unused-suppression` per deprecated rule,
+  at its comment. If it names only deprecated rules, it becomes no suppression at all, so it opens
+  and closes no region.
 * A `Parser` processes the candidates in source order, and keeps the open regions.
 
 The result is `ParsedComments`: the `Suppressions`, the remaining comment lines, the
@@ -1709,13 +1712,13 @@ line is in range.
 
 `src/diagnostic.rs` defines:
 
-* `DiagnosticCode`: `Rule(RuleId)`, or one of the meta codes `ParseError`, `InvalidSuppression` and
-  `UnusedSuppression`. `name` gives the rule or meta name, and `code` the stable code, which is
-  `LNT001` to `LNT003` for the meta codes. Meta codes are always on, aren't selected by `--rule`,
-  and can't be suppressed.
+* `DiagnosticKind`: `Rule(RuleId)`, or one of the meta diagnostics `ParseError`,
+  `InvalidSuppression` and `UnusedSuppression`. `name` gives the rule or meta name, and `code` the
+  stable `Code`, which is `LNT001` to `LNT003` for the meta diagnostics. Meta diagnostics are always
+  on, aren't selected by `--rule`, and can't be suppressed.
 * `Position`: a 1-based line and column, with columns in Unicode scalar values. `proc-macro2`
   columns are 0-based scalar counts, so `syntax/span.rs` adds 1.
-* `Diagnostic`: a code, a position, a message, an anchor span, and an optional fn header.
+* `Diagnostic`: a kind, a position, a message, an anchor span, and an optional fn header.
   `Diagnostic::new` sets the anchor to the position's line. `with_anchor` and `with_fn_header` widen
   it.
 
@@ -1802,8 +1805,9 @@ fn or comment it belonged to, and the anchor spans cover the rest.
 * `diagnostic.rs` freezes the code table: `codes_are_frozen` lists every `(code, name)` pair, so
   renumbering or reusing a code fails a test. Other tests check that the codes and names are unique,
   that each code is well-formed, and that each set is numbered from 1 without gaps.
-* The deprecation paths are tested with `RuleId::with_deprecated`, through the real entry points:
-  `RuleSet`, `RuleSelector`, `Cli`, `Directive::parse` and `FileChecker::check`.
+* `diagnostic.rs` also tests that diagnostics at one position sort by name, not by code.
+* The deprecation paths have no tests until a rule is deprecated. See [Deprecating a
+  rule](#deprecating-a-rule).
 * `tests/cli.rs` runs the built binary (`CARGO_BIN_EXE_yscope-rust-linter`) on files each test
   writes under `CARGO_TARGET_TMPDIR`. It covers the output format and order, exit codes, the
   directory walk, `@generated` skipping, `--rule`, `--exclude`, `--diff -`, `--format github` and

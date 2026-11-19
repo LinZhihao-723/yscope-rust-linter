@@ -7,7 +7,7 @@ use std::path::Path;
 
 use crate::config::RuleSet;
 use crate::diagnostic::Diagnostic;
-use crate::diagnostic::DiagnosticCode;
+use crate::diagnostic::DiagnosticKind;
 use crate::diagnostic::Position;
 use crate::lexer;
 use crate::lexer::CommentLine;
@@ -174,7 +174,7 @@ impl<'source> FileContext<'source> {
         }
         let lex_diagnostic = lex_error.map(|lex_error| {
             Diagnostic::new(
-                DiagnosticCode::ParseError,
+                DiagnosticKind::ParseError,
                 Position {
                     line: lex_error.line,
                     column: lex_error.column,
@@ -227,7 +227,7 @@ impl<'source> FileContext<'source> {
             "are"
         };
         Some(Diagnostic::new(
-            DiagnosticCode::ParseError,
+            DiagnosticKind::ParseError,
             span::start_position(parse_error.span()),
             format!(
                 "syn failed to parse the file ({parse_error}); {} {verb} skipped",
@@ -252,7 +252,7 @@ impl<'source> FileContext<'source> {
             "check"
         };
         Some(Diagnostic::new(
-            DiagnosticCode::ParseError,
+            DiagnosticKind::ParseError,
             Position { line: 1, column: 1 },
             format!(
                 "can't tell whether this file is a `#[cfg(test)]` module: {problem}; {} {verb} it \
@@ -306,14 +306,14 @@ fn joined(rule_ids: &[RuleId]) -> String {
 mod tests {
     use super::*;
 
-    fn finished(source_text: &str) -> Vec<(DiagnosticCode, usize, String)> {
+    fn finished(source_text: &str) -> Vec<(DiagnosticKind, usize, String)> {
         let test_module_cache = TestModuleCache::default();
         FileContext::new(Path::new("a.rs"), source_text, &test_module_cache)
             .finish(Vec::new(), &RuleSet::all())
             .iter()
             .map(|diagnostic| {
                 (
-                    diagnostic.code(),
+                    diagnostic.kind(),
                     diagnostic.position().line,
                     diagnostic.message().to_owned(),
                 )
@@ -327,22 +327,22 @@ mod tests {
         assert_eq!(
             finished(&format!("{allow_item}fn f( {{}}\n")),
             [(
-                DiagnosticCode::InvalidSuppression,
+                DiagnosticKind::InvalidSuppression,
                 1,
                 "can't locate the item of this `allow-item` suppression: syn failed to parse the \
                  file (cannot parse string into token stream)"
                     .to_owned()
             )]
         );
-        let codes: Vec<_> = finished(&format!("{allow_item}fn f() {{\n    \"open\n"))
+        let kinds: Vec<_> = finished(&format!("{allow_item}fn f() {{\n    \"open\n"))
             .into_iter()
-            .map(|(code, line, message)| (code, line, message.contains("failed to lex")))
+            .map(|(kind, line, message)| (kind, line, message.contains("failed to lex")))
             .collect();
         assert_eq!(
-            codes,
+            kinds,
             [
-                (DiagnosticCode::ParseError, 3, false),
-                (DiagnosticCode::InvalidSuppression, 1, true),
+                (DiagnosticKind::ParseError, 3, false),
+                (DiagnosticKind::InvalidSuppression, 1, true),
             ]
         );
     }
@@ -361,7 +361,7 @@ mod tests {
         let messages: Vec<String> = context
             .finish(Vec::new(), &RuleSet::all())
             .iter()
-            .map(|diagnostic| format!("{}: {}", diagnostic.code(), diagnostic.message()))
+            .map(|diagnostic| format!("{}: {}", diagnostic.kind(), diagnostic.message()))
             .collect();
         assert_eq!(
             messages,

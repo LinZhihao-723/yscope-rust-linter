@@ -584,7 +584,7 @@ fn rule_flag_and_suppressions_accept_codes_and_sets() {
         .collect::<Vec<_>>()
         .join("\n");
     write_file(&directory, "b.rs", &unsuppressed);
-    let codes: Vec<_> = stdout_lines(&run(&directory, &["--rule", "DOC", "b.rs"], ""))
+    let codes_and_names: Vec<_> = stdout_lines(&run(&directory, &["--rule", "DOC", "b.rs"], ""))
         .into_iter()
         .map(|line| {
             line.split(": ")
@@ -593,5 +593,8 @@ fn rule_flag_and_suppressions_accept_codes_and_sets() {
                 .to_owned()
         })
         .collect();
-    assert_eq!(codes, ["DOC003 type-params-doc", "DOC003 type-params-doc"]);
+    assert_eq!(
+        codes_and_names,
+        ["DOC003 type-params-doc", "DOC003 type-params-doc"]
+    );
 }

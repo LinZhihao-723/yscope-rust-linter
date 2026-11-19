@@ -183,7 +183,7 @@ mod tests {
     use super::*;
     use crate::config::OutputFormat;
     use crate::config::Width;
-    use crate::diagnostic::DiagnosticCode;
+    use crate::diagnostic::DiagnosticKind;
 
     fn file_checker(rule_set: RuleSet) -> FileChecker {
         let config = LintConfig {
@@ -230,47 +230,12 @@ mod tests {
     }
 
     #[test]
-    fn deprecated_rule_never_runs() {
-        let source_text = "/// Loads.\n///\n/// # Errors\n///\n/// Returns an error if:\n///\n/// \
-                           * Forwards [`save`]'s return values on failure.\nfn f() -> Result<(), \
-                           E> {\n    Ok(())\n}\n";
-        let codes = || -> Vec<DiagnosticCode> {
-            file_checker(RuleSet::all())
-                .check(Path::new("a.rs"), source_text, &LineFilter::All)
-                .iter()
-                .map(Diagnostic::code)
-                .collect()
-        };
-        assert_eq!(codes(), [RuleId::ErrorsDoc.into()]);
-        RuleId::ErrorsDoc.with_deprecated(|| assert_eq!(codes(), []));
-    }
-
-    #[test]
-    fn suppression_of_a_deprecated_rule_is_reported_as_unused() {
-        let source_text = "// yscope-rust-linter: allow(errors-doc): reason\nfn f() {}\n";
-        let rendered = RuleId::ErrorsDoc.with_deprecated(|| {
-            rendered(file_checker(RuleSet::all()).check(
-                Path::new("a.rs"),
-                source_text,
-                &LineFilter::All,
-            ))
-        });
-        assert_eq!(
-            rendered,
-            [
-                "a.rs:1:1: LNT003 unused-suppression: `errors-doc` (DOC002) is deprecated and \
-                 never reports a finding; remove it from this suppression"
-            ]
-        );
-    }
-
-    #[test]
     fn syn_failure_is_a_parse_error_only_when_errors_doc_runs() {
         let source_text = "fn f( {}\n";
         let diagnostics =
             file_checker(RuleSet::all()).check(Path::new("a.rs"), source_text, &LineFilter::All);
-        let codes: Vec<_> = diagnostics.iter().map(Diagnostic::code).collect();
-        assert_eq!(codes, [DiagnosticCode::ParseError]);
+        let kinds: Vec<_> = diagnostics.iter().map(Diagnostic::kind).collect();
+        assert_eq!(kinds, [DiagnosticKind::ParseError]);
 
         let rule_set: RuleSet = std::iter::once(RuleId::CommentGreedyWrap).collect();
         assert_eq!(
@@ -363,16 +328,16 @@ mod tests {
     fn unused_suppression_is_reported_only_when_its_line_is_in_range() {
         let source_text =
             "// yscope-rust-linter: allow(errors-doc): reason\nfn f() {}\n\nfn g() {}\n";
-        let codes = |ranges: &str| -> Vec<DiagnosticCode> {
+        let kinds = |ranges: &str| -> Vec<DiagnosticKind> {
             let line_filter = LineFilter::Ranges(ranges.parse().expect("valid ranges"));
             file_checker(RuleSet::all())
                 .check(Path::new("a.rs"), source_text, &line_filter)
                 .iter()
-                .map(Diagnostic::code)
+                .map(Diagnostic::kind)
                 .collect()
         };
-        assert_eq!(codes("1"), [DiagnosticCode::UnusedSuppression]);
-        assert_eq!(codes("2-4"), []);
+        assert_eq!(kinds("1"), [DiagnosticKind::UnusedSuppression]);
+        assert_eq!(kinds("2-4"), []);
     }
 
     #[test]
@@ -382,7 +347,7 @@ mod tests {
             file_checker(rule_set.clone())
                 .check(Path::new("a.rs"), source_text, &LineFilter::All)
                 .iter()
-                .filter(|diagnostic| diagnostic.code() == RuleId::CommentGreedyWrap.into())
+                .filter(|diagnostic| diagnostic.kind() == RuleId::CommentGreedyWrap.into())
                 .map(|diagnostic| diagnostic.position().line)
                 .collect()
         };
@@ -412,7 +377,7 @@ mod tests {
         let lines: Vec<_> = file_checker(rule_set)
             .check(Path::new("a.rs"), source_text, &LineFilter::All)
             .iter()
-            .map(|diagnostic| (diagnostic.code(), diagnostic.position().line))
+            .map(|diagnostic| (diagnostic.kind(), diagnostic.position().line))
             .collect();
         assert_eq!(lines, [(RuleId::CommentGreedyWrap.into(), 5)]);
     }
@@ -420,17 +385,17 @@ mod tests {
     #[test]
     fn greedy_wrap_only_run_parses_only_files_with_an_allow_item() {
         let rule_set: RuleSet = std::iter::once(RuleId::CommentGreedyWrap).collect();
-        let codes = |source_text: &str| -> Vec<DiagnosticCode> {
+        let kinds = |source_text: &str| -> Vec<DiagnosticKind> {
             file_checker(rule_set.clone())
                 .check(Path::new("a.rs"), source_text, &LineFilter::All)
                 .iter()
-                .map(Diagnostic::code)
+                .map(Diagnostic::kind)
                 .collect()
         };
-        assert_eq!(codes("fn f( {}\n"), []);
+        assert_eq!(kinds("fn f( {}\n"), []);
         assert_eq!(
-            codes("// yscope-rust-linter: allow-item(comment-greedy-wrap): reason\nfn f( {}\n"),
-            [DiagnosticCode::InvalidSuppression]
+            kinds("// yscope-rust-linter: allow-item(comment-greedy-wrap): reason\nfn f( {}\n"),
+            [DiagnosticKind::InvalidSuppression]
         );
     }
 }

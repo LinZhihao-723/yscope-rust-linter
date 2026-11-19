@@ -1,4 +1,5 @@
-//! Diagnostic codes, the diagnostics rules produce, and their sorted text and GitHub rendering.
+//! Diagnostic kinds and their codes, the diagnostics rules produce, and their sorted text and
+//! GitHub rendering.
 
 use std::cmp::Ordering;
 use std::fmt;
@@ -12,7 +13,7 @@ use crate::rules::RuleId;
 
 /// What a diagnostic reports: a rule's finding, or a meta diagnostic that no rule owns.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum DiagnosticCode {
+pub enum DiagnosticKind {
     /// A finding of a lint rule.
     Rule(RuleId),
 
@@ -26,7 +27,7 @@ pub enum DiagnosticCode {
     ParseError,
 }
 
-impl DiagnosticCode {
+impl DiagnosticKind {
     pub const META: [Self; 3] = [
         Self::InvalidSuppression,
         Self::UnusedSuppression,
@@ -59,7 +60,7 @@ impl DiagnosticCode {
 
     /// # Returns
     ///
-    /// The rule that owns this code, or [`None`] for a meta code.
+    /// The rule that owns this kind, or [`None`] for a meta diagnostic.
     pub const fn rule_id(self) -> Option<RuleId> {
         match self {
             Self::Rule(rule_id) => Some(rule_id),
@@ -68,13 +69,13 @@ impl DiagnosticCode {
     }
 }
 
-impl fmt::Display for DiagnosticCode {
+impl fmt::Display for DiagnosticKind {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(formatter, "{} {}", self.code(), self.name())
     }
 }
 
-impl From<RuleId> for DiagnosticCode {
+impl From<RuleId> for DiagnosticKind {
     fn from(rule_id: RuleId) -> Self {
         Self::Rule(rule_id)
     }
@@ -90,7 +91,7 @@ pub struct Position {
 /// One finding in one file.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Diagnostic {
-    code: DiagnosticCode,
+    kind: DiagnosticKind,
     position: Position,
     message: String,
     anchor: LineSpan,
@@ -104,15 +105,15 @@ impl Diagnostic {
     ///
     /// # Returns
     ///
-    /// A diagnostic with the given code, position and message.
+    /// A diagnostic with the given kind, position and message.
     ///
     /// # Panics
     ///
     /// Panics if `position.line` is 0.
-    pub fn new(code: DiagnosticCode, position: Position, message: String) -> Self {
+    pub fn new(kind: DiagnosticKind, position: Position, message: String) -> Self {
         assert!(position.line > 0, "diagnostic lines start at 1");
         Self {
-            code,
+            kind,
             position,
             message,
             anchor: LineSpan::single(position.line),
@@ -143,8 +144,8 @@ impl Diagnostic {
         self
     }
 
-    pub const fn code(&self) -> DiagnosticCode {
-        self.code
+    pub const fn kind(&self) -> DiagnosticKind {
+        self.kind
     }
 
     pub const fn position(&self) -> Position {
@@ -182,14 +183,14 @@ impl FileDiagnostic {
     pub fn render(&self, format: OutputFormat) -> String {
         let path = self.path.display().to_string();
         let Position { line, column } = self.diagnostic.position();
-        let code = self.diagnostic.code().to_string();
+        let code_and_name = self.diagnostic.kind().to_string();
         let message = self.diagnostic.message();
         match format {
-            OutputFormat::Text => format!("{path}:{line}:{column}: {code}: {message}"),
+            OutputFormat::Text => format!("{path}:{line}:{column}: {code_and_name}: {message}"),
             OutputFormat::Github => format!(
                 "::error file={},line={line},col={column},title={}::{}",
                 escape_github_property(&path),
-                escape_github_property(&code),
+                escape_github_property(&code_and_name),
                 escape_github_data(message)
             ),
         }
@@ -207,9 +208,9 @@ impl FileDiagnostic {
             .then_with(|| self.diagnostic.position.cmp(&other.diagnostic.position))
             .then_with(|| {
                 self.diagnostic
-                    .code
+                    .kind
                     .name()
-                    .cmp(other.diagnostic.code.name())
+                    .cmp(other.diagnostic.kind.name())
             })
             .then_with(|| self.diagnostic.message.cmp(&other.diagnostic.message))
     }
@@ -262,18 +263,18 @@ mod tests {
         path: &str,
         line: usize,
         column: usize,
-        code: DiagnosticCode,
+        kind: DiagnosticKind,
         message: &str,
     ) -> FileDiagnostic {
         FileDiagnostic {
             path: PathBuf::from(path),
-            diagnostic: Diagnostic::new(code, Position { line, column }, message.to_owned()),
+            diagnostic: Diagnostic::new(kind, Position { line, column }, message.to_owned()),
         }
     }
 
     #[test]
     fn text_rendering_has_path_position_code_and_message() {
-        let diagnostic = file_diagnostic("src/a.rs", 3, 5, DiagnosticCode::ParseError, "bad input");
+        let diagnostic = file_diagnostic("src/a.rs", 3, 5, DiagnosticKind::ParseError, "bad input");
         assert_eq!(
             diagnostic.render(OutputFormat::Text),
             "src/a.rs:3:5: LNT001 parse-error: bad input"
@@ -299,12 +300,12 @@ mod tests {
     #[test]
     fn sort_and_dedup_orders_by_path_position_code_then_message() {
         let mut diagnostics = vec![
-            file_diagnostic("b.rs", 1, 1, DiagnosticCode::ParseError, "m"),
-            file_diagnostic("a.rs", 2, 1, DiagnosticCode::ParseError, "m"),
+            file_diagnostic("b.rs", 1, 1, DiagnosticKind::ParseError, "m"),
+            file_diagnostic("a.rs", 2, 1, DiagnosticKind::ParseError, "m"),
             file_diagnostic("a.rs", 1, 9, RuleId::ErrorsDoc.into(), "z"),
             file_diagnostic("a.rs", 1, 9, RuleId::ErrorsDoc.into(), "a"),
             file_diagnostic("a.rs", 1, 9, RuleId::CommentGreedyWrap.into(), "z"),
-            file_diagnostic("a.rs", 1, 10, DiagnosticCode::ParseError, "m"),
+            file_diagnostic("a.rs", 1, 10, DiagnosticKind::ParseError, "m"),
             file_diagnostic("a.rs", 1, 9, RuleId::ErrorsDoc.into(), "a"),
         ];
         FileDiagnostic::sort_and_dedup(&mut diagnostics);
@@ -325,19 +326,39 @@ mod tests {
         );
     }
 
-    fn every_code() -> Vec<DiagnosticCode> {
+    #[test]
+    fn sort_and_dedup_orders_kinds_at_one_position_by_name_not_by_code() {
+        let mut diagnostics = vec![
+            file_diagnostic("a.rs", 1, 1, RuleId::TypeParamsDoc.into(), "m"),
+            file_diagnostic("a.rs", 1, 1, RuleId::SymbolOrder.into(), "m"),
+        ];
+        FileDiagnostic::sort_and_dedup(&mut diagnostics);
+        let rendered: Vec<_> = diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.render(OutputFormat::Text))
+            .collect();
+        assert_eq!(
+            rendered,
+            [
+                "a.rs:1:1: ORG001 symbol-order: m",
+                "a.rs:1:1: DOC003 type-params-doc: m",
+            ]
+        );
+    }
+
+    fn every_kind() -> Vec<DiagnosticKind> {
         RuleId::ALL
             .into_iter()
-            .map(DiagnosticCode::from)
-            .chain(DiagnosticCode::META)
+            .map(DiagnosticKind::from)
+            .chain(DiagnosticKind::META)
             .collect()
     }
 
     #[test]
     fn codes_are_frozen() {
-        let mut table: Vec<_> = every_code()
+        let mut table: Vec<_> = every_kind()
             .into_iter()
-            .map(|code| (code.code().to_string(), code.name()))
+            .map(|kind| (kind.code().to_string(), kind.name()))
             .collect();
         table.sort_unstable();
         assert_eq!(
@@ -357,10 +378,10 @@ mod tests {
 
     #[test]
     fn codes_are_well_formed_and_numbered_without_gaps_in_each_set() {
-        for code in every_code() {
-            let text = code.code().to_string();
+        for kind in every_kind() {
+            let text = kind.code().to_string();
             let (prefix, digits) = text.split_at(3);
-            assert_eq!(prefix, code.code().set.prefix(), "{text}");
+            assert_eq!(prefix, kind.code().set.prefix(), "{text}");
             assert!(
                 prefix.len() == 3 && prefix.bytes().all(|byte| byte.is_ascii_uppercase()),
                 "{text}"
@@ -370,15 +391,15 @@ mod tests {
                 "{text}"
             );
             assert_eq!(
-                code.code().set == CodeSet::Lnt,
-                code.rule_id().is_none(),
+                kind.code().set == CodeSet::Lnt,
+                kind.rule_id().is_none(),
                 "{text}"
             );
         }
         for set in CodeSet::ALL {
-            let mut numbers: Vec<_> = every_code()
+            let mut numbers: Vec<_> = every_kind()
                 .into_iter()
-                .map(DiagnosticCode::code)
+                .map(DiagnosticKind::code)
                 .filter(|code| code.set == set)
                 .map(|code| code.number)
                 .collect();
@@ -390,11 +411,11 @@ mod tests {
 
     #[test]
     fn codes_and_names_are_unique() {
-        let codes = every_code();
-        for (index, code) in codes.iter().enumerate() {
-            for other in &codes[index + 1..] {
-                assert_ne!(code.code(), other.code());
-                assert_ne!(code.name(), other.name());
+        let kinds = every_kind();
+        for (index, kind) in kinds.iter().enumerate() {
+            for other in &kinds[index + 1..] {
+                assert_ne!(kind.code(), other.code());
+                assert_ne!(kind.name(), other.name());
             }
         }
     }

@@ -211,7 +211,7 @@ mod tests {
         let flagged = diagnostics(source_text, 11);
         assert_eq!(flagged.len(), 1);
         assert_eq!(flagged[0].position(), Position { line: 1, column: 1 });
-        assert_eq!(flagged[0].code(), RuleId::CommentGreedyWrap.into());
+        assert_eq!(flagged[0].kind(), RuleId::CommentGreedyWrap.into());
         assert_eq!(
             flagged[0].message(),
             "line is 7 columns wide and the next line's first word `bbb` (3 columns) fits within \
