@@ -10,6 +10,8 @@
 //! // yscope-rust-linter: allow-end(<rule-id>[, <rule-id>]...)
 //! // yscope-rust-linter: allow-file(<rule-id>[, <rule-id>]...): <reason>
 //! ```
+//!
+//! Each `<rule-id>` is a [`RuleSelector`]: a rule name, a code, or a set prefix.
 
 use std::cmp::Reverse;
 use std::collections::BTreeMap;
@@ -23,7 +25,9 @@ use crate::diagnostic::Position;
 use crate::lexer::CommentLine;
 use crate::lexer::CommentMarker;
 use crate::line_ranges::LineSpan;
+use crate::rules::InvalidRuleSelector;
 use crate::rules::RuleId;
+use crate::rules::RuleSelector;
 use crate::syntax::item_lines::ItemLines;
 
 /// One valid suppression, with the lines it covers.
@@ -223,6 +227,10 @@ pub struct ParsedComments {
 
     /// An `invalid-suppression` diagnostic for each malformed or misplaced suppression candidate.
     pub invalid_suppressions: Vec<Diagnostic>,
+
+    /// An `unused-suppression` diagnostic for each deprecated rule that a valid suppression names,
+    /// since a deprecated rule never reports a finding.
+    pub deprecated_rules: Vec<Diagnostic>,
 }
 
 /// Splits a file's comment lines into suppressions and the rest.
@@ -241,6 +249,9 @@ pub struct ParsedComments {
 ///   the next `allow-end` that names the rule. A start without an end, an end without an open
 ///   start, and a start for a rule whose region is still open are invalid.
 /// * `allow-file`: the whole file. One after `header_end`, the end of the file header, is invalid.
+///
+/// A deprecated rule that a valid suppression names is reported and covers nothing, so a
+/// suppression that names only deprecated rules covers no lines.
 ///
 /// # Returns
 ///
@@ -286,13 +297,25 @@ pub fn parse(comment_lines: Vec<CommentLine>, header_end: Option<Position>) -> P
             line: candidate.line,
             column: candidate.marker_column,
         };
-        let Directive { kind, rule_ids } = match Directive::parse(&candidate.text) {
+        let Directive {
+            kind,
+            rule_ids,
+            deprecated_rule_ids,
+        } = match Directive::parse(&candidate.text) {
             Ok(directive) => directive,
             Err(invalid) => {
                 parser.reject(invalid, position);
                 continue;
             }
         };
+        parser.deprecated_rules.extend(
+            deprecated_rule_ids
+                .into_iter()
+                .map(|rule_id| deprecated_rule_diagnostic(rule_id, position)),
+        );
+        if rule_ids.is_empty() {
+            continue;
+        }
         match kind {
             SuppressionKind::Allow => {
                 let lines = if candidate.is_own_line {
@@ -432,13 +455,16 @@ impl SuppressionKind {
 struct Directive {
     kind: SuppressionKind,
 
-    /// The rule IDs the suppression names, without duplicates.
+    /// The rules the suppression names that aren't deprecated, without duplicates.
     rule_ids: Vec<RuleId>,
+
+    /// The deprecated rules the suppression names by name or code, without duplicates.
+    deprecated_rule_ids: Vec<RuleId>,
 }
 
 impl Directive {
     /// Parses the text of a suppression candidate: the prefix, the keyword of a form, the `(...)`
-    /// list of rule IDs, and `: <reason>`, which only `allow-end` may leave out.
+    /// list of [`RuleSelector`]s, and `: <reason>`, which only `allow-end` may leave out.
     ///
     /// # Returns
     ///
@@ -451,8 +477,7 @@ impl Directive {
     /// * [`InvalidSuppression::Syntax`] if the text doesn't have the form's syntax.
     /// * [`InvalidSuppression::UnknownKind`] if the keyword names no form.
     /// * [`InvalidSuppression::NoRuleIds`] if the `(...)` list is empty.
-    /// * [`InvalidSuppression::MetaCode`] if the list names a meta code.
-    /// * [`InvalidSuppression::UnknownRuleId`] if the list names an unknown ID.
+    /// * [`InvalidSuppression::Selector`] if the list names a meta code or an unknown rule.
     /// * [`InvalidSuppression::MissingReason`] if the form needs a reason and the reason is empty.
     fn parse(text: &str) -> Result<Self, InvalidSuppression> {
         let directive = text
@@ -488,6 +513,7 @@ impl Directive {
         };
 
         let mut rule_ids = Vec::new();
+        let mut deprecated_rule_ids = Vec::new();
         for id in id_list.split(',').map(str::trim) {
             if id.is_empty() {
                 return Err(if id_list.trim().is_empty() {
@@ -496,21 +522,28 @@ impl Directive {
                     syntax_error
                 });
             }
-            let rule_id = id.parse::<RuleId>().map_err(|_| {
-                if DiagnosticCode::META.iter().any(|code| code.as_str() == id) {
-                    InvalidSuppression::MetaCode { id: id.to_owned() }
+            let selector = id
+                .parse::<RuleSelector>()
+                .map_err(|error| InvalidSuppression::Selector { error })?;
+            for rule_id in selector.rule_ids() {
+                let target = if rule_id.is_deprecated() {
+                    &mut deprecated_rule_ids
                 } else {
-                    InvalidSuppression::UnknownRuleId { id: id.to_owned() }
+                    &mut rule_ids
+                };
+                if !target.contains(&rule_id) {
+                    target.push(rule_id);
                 }
-            })?;
-            if !rule_ids.contains(&rule_id) {
-                rule_ids.push(rule_id);
             }
         }
         if kind.needs_reason() && reason.is_none_or(|reason| reason.trim().is_empty()) {
             return Err(InvalidSuppression::MissingReason { kind });
         }
-        Ok(Self { kind, rule_ids })
+        Ok(Self {
+            kind,
+            rule_ids,
+            deprecated_rule_ids,
+        })
     }
 }
 
@@ -527,11 +560,8 @@ enum InvalidSuppression {
     /// The `(...)` list is empty.
     NoRuleIds { kind: SuppressionKind },
 
-    /// An ID in the `(...)` list is a meta code, which can't be suppressed.
-    MetaCode { id: String },
-
-    /// An ID in the `(...)` list is neither a rule ID nor a meta code.
-    UnknownRuleId { id: String },
+    /// An ID in the `(...)` list names a meta code, which can't be suppressed, or no rule.
+    Selector { error: InvalidRuleSelector },
 
     /// The reason after `):` is empty, and form `kind` needs one.
     MissingReason { kind: SuppressionKind },
@@ -599,17 +629,12 @@ impl fmt::Display for InvalidSuppression {
                 "suppression names no rule; expected {}",
                 kind.syntax()
             ),
-            Self::MetaCode { id } => {
-                write!(formatter, "`{id}` is not a rule and can't be suppressed")
+            Self::Selector {
+                error: InvalidRuleSelector::MetaCode { text },
+            } => {
+                write!(formatter, "`{text}` is not a rule and can't be suppressed")
             }
-            Self::UnknownRuleId { id } => {
-                let known: Vec<_> = RuleId::ALL.iter().map(|rule_id| rule_id.as_str()).collect();
-                write!(
-                    formatter,
-                    "unknown rule `{id}`; expected one of {}",
-                    known.join(", ")
-                )
-            }
+            Self::Selector { error } => write!(formatter, "{error}"),
             Self::MissingReason { kind } => write!(
                 formatter,
                 "suppression needs a reason after `):`; expected {}",
@@ -659,6 +684,7 @@ struct Parser {
     suppressions: Vec<Suppression>,
     unlocated_items: Vec<UnlocatedItem>,
     invalid_suppressions: Vec<Diagnostic>,
+    deprecated_rules: Vec<Diagnostic>,
 
     /// The regions that are open, in the order they opened.
     open_regions: Vec<OpenRegion>,
@@ -757,6 +783,7 @@ impl Parser {
             },
             comment_lines,
             invalid_suppressions: self.invalid_suppressions,
+            deprecated_rules: self.deprecated_rules,
         }
     }
 }
@@ -795,11 +822,26 @@ fn block_last_line(comment_lines: &[CommentLine], start_index: usize) -> usize {
 
 /// # Returns
 ///
+/// The `unused-suppression` diagnostic at `position` that reports the deprecated rule `rule_id`.
+fn deprecated_rule_diagnostic(rule_id: RuleId, position: Position) -> Diagnostic {
+    Diagnostic::new(
+        DiagnosticCode::UnusedSuppression,
+        position,
+        format!(
+            "`{rule_id}` ({}) is deprecated and never reports a finding; remove it from this \
+             suppression",
+            rule_id.code()
+        ),
+    )
+}
+
+/// # Returns
+///
 /// `rule_ids` joined with `, `.
 fn join_rule_ids(rule_ids: &[RuleId]) -> String {
     rule_ids
         .iter()
-        .map(|rule_id| rule_id.as_str())
+        .map(|rule_id| rule_id.name())
         .collect::<Vec<_>>()
         .join(", ")
 }
@@ -920,6 +962,65 @@ mod tests {
     }
 
     #[test]
+    fn suppressions_name_rules_by_name_code_or_set() {
+        assert_eq!(
+            rule_ids(" yscope-rust-linter: allow(DOC002, ORG): why"),
+            Ok(vec![RuleId::ErrorsDoc, RuleId::SymbolOrder])
+        );
+        assert_eq!(
+            rule_ids(" yscope-rust-linter: allow-end(type-params-doc, DOC, DOC003)"),
+            Ok(vec![
+                RuleId::TypeParamsDoc,
+                RuleId::CommentGreedyWrap,
+                RuleId::ErrorsDoc,
+                RuleId::TraitParamsDoc,
+            ])
+        );
+    }
+
+    #[test]
+    fn deprecated_rule_named_in_a_suppression_is_reported_and_suppresses_nothing() {
+        RuleId::ErrorsDoc.with_deprecated(|| {
+            let source_text = concat!(
+                "// yscope-rust-linter: allow-file(DOC): reason\n",
+                "// yscope-rust-linter: allow(errors-doc, comment-greedy-wrap): reason\n",
+                "// A block.\n",
+                "// yscope-rust-linter: allow(DOC002): reason\n",
+                "fn f() {}\n",
+                "// yscope-rust-linter: allow-start(DOC002): reason\n",
+                "// yscope-rust-linter: allow-end(errors-doc)\n",
+            );
+            let parsed = parse_source(source_text);
+            assert_eq!(parsed.invalid_suppressions, []);
+            assert_eq!(covered_spans(&parsed), ["file", "3"]);
+            let deprecated_rules: Vec<_> = parsed
+                .deprecated_rules
+                .iter()
+                .map(|diagnostic| (diagnostic.code(), diagnostic.position().line))
+                .collect();
+            assert_eq!(
+                deprecated_rules,
+                [2, 4, 6, 7].map(|line| (DiagnosticCode::UnusedSuppression, line))
+            );
+            assert_eq!(
+                parsed.deprecated_rules[0].message(),
+                "`errors-doc` (DOC002) is deprecated and never reports a finding; remove it from \
+                 this suppression"
+            );
+            let diagnostics = vec![
+                finding(RuleId::CommentGreedyWrap, 3),
+                finding(RuleId::ErrorsDoc, 5),
+            ];
+            assert_eq!(
+                parsed
+                    .suppressions
+                    .apply(diagnostics.clone(), &RuleSet::all()),
+                diagnostics[1..]
+            );
+        });
+    }
+
+    #[test]
     fn malformed_suppressions_are_rejected() {
         let cases = [
             (
@@ -954,14 +1055,34 @@ mod tests {
             ),
             (
                 " yscope-rust-linter: allow(parse-error): why",
-                InvalidSuppression::MetaCode {
-                    id: "parse-error".to_owned(),
+                InvalidSuppression::Selector {
+                    error: InvalidRuleSelector::MetaCode {
+                        text: "parse-error".to_owned(),
+                    },
+                },
+            ),
+            (
+                " yscope-rust-linter: allow(errors-doc, LNT): why",
+                InvalidSuppression::Selector {
+                    error: InvalidRuleSelector::MetaCode {
+                        text: "LNT".to_owned(),
+                    },
                 },
             ),
             (
                 " yscope-rust-linter: allow(errors_doc): why",
-                InvalidSuppression::UnknownRuleId {
-                    id: "errors_doc".to_owned(),
+                InvalidSuppression::Selector {
+                    error: InvalidRuleSelector::Unknown {
+                        text: "errors_doc".to_owned(),
+                    },
+                },
+            ),
+            (
+                " yscope-rust-linter: allow(doc002): why",
+                InvalidSuppression::Selector {
+                    error: InvalidRuleSelector::Unknown {
+                        text: "doc002".to_owned(),
+                    },
                 },
             ),
         ];

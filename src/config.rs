@@ -19,7 +19,7 @@ pub struct LintConfig {
     pub excludes: Vec<PathBuf>,
 }
 
-/// The rules enabled in a run.
+/// The rules enabled in a run. A deprecated rule is never enabled.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuleSet {
     rule_ids: HashSet<RuleId>,
@@ -44,7 +44,10 @@ impl RuleSet {
 impl FromIterator<RuleId> for RuleSet {
     fn from_iter<IteratorType: IntoIterator<Item = RuleId>>(rule_ids: IteratorType) -> Self {
         Self {
-            rule_ids: rule_ids.into_iter().collect(),
+            rule_ids: rule_ids
+                .into_iter()
+                .filter(|rule_id| !rule_id.is_deprecated())
+                .collect(),
         }
     }
 }
@@ -73,7 +76,7 @@ impl Width {
 /// How diagnostics are printed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 pub enum OutputFormat {
-    /// `<path>:<line>:<column>: <code>: <message>`.
+    /// `<path>:<line>:<column>: <code> <name>: <message>`.
     Text,
 
     /// GitHub Actions `::error` workflow commands.
@@ -101,5 +104,18 @@ mod tests {
                 .into_iter()
                 .all(|rule_id| RuleSet::all().contains(rule_id))
         );
+    }
+
+    #[test]
+    fn rule_set_never_enables_a_deprecated_rule() {
+        RuleId::ErrorsDoc.with_deprecated(|| {
+            assert!(!RuleSet::all().contains(RuleId::ErrorsDoc));
+            assert!(RuleSet::all().contains(RuleId::CommentGreedyWrap));
+            let rule_set: RuleSet = [RuleId::ErrorsDoc, RuleId::SymbolOrder]
+                .into_iter()
+                .collect();
+            assert!(!rule_set.contains(RuleId::ErrorsDoc));
+            assert!(rule_set.contains(RuleId::SymbolOrder));
+        });
     }
 }

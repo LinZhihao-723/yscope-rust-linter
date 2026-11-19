@@ -223,8 +223,43 @@ mod tests {
         assert_eq!(
             rendered(diagnostics),
             [
-                "a.rs:2:5: parse-error: unterminated string literal; only the comments before it \
-                 are checked"
+                "a.rs:2:5: LNT001 parse-error: unterminated string literal; only the comments \
+                 before it are checked"
+            ]
+        );
+    }
+
+    #[test]
+    fn deprecated_rule_never_runs() {
+        let source_text = "/// Loads.\n///\n/// # Errors\n///\n/// Returns an error if:\n///\n/// \
+                           * Forwards [`save`]'s return values on failure.\nfn f() -> Result<(), \
+                           E> {\n    Ok(())\n}\n";
+        let codes = || -> Vec<DiagnosticCode> {
+            file_checker(RuleSet::all())
+                .check(Path::new("a.rs"), source_text, &LineFilter::All)
+                .iter()
+                .map(Diagnostic::code)
+                .collect()
+        };
+        assert_eq!(codes(), [RuleId::ErrorsDoc.into()]);
+        RuleId::ErrorsDoc.with_deprecated(|| assert_eq!(codes(), []));
+    }
+
+    #[test]
+    fn suppression_of_a_deprecated_rule_is_reported_as_unused() {
+        let source_text = "// yscope-rust-linter: allow(errors-doc): reason\nfn f() {}\n";
+        let rendered = RuleId::ErrorsDoc.with_deprecated(|| {
+            rendered(file_checker(RuleSet::all()).check(
+                Path::new("a.rs"),
+                source_text,
+                &LineFilter::All,
+            ))
+        });
+        assert_eq!(
+            rendered,
+            [
+                "a.rs:1:1: LNT003 unused-suppression: `errors-doc` (DOC002) is deprecated and \
+                 never reports a finding; remove it from this suppression"
             ]
         );
     }

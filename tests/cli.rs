@@ -103,8 +103,8 @@ fn diagnostics_are_sorted_and_exit_one() {
     );
     let output = run(&directory, &["."], "");
     assert_eq!(output.status.code(), Some(1));
-    let message = "invalid-suppression: malformed suppression; expected `// yscope-rust-linter: \
-                   allow(<rule-id>[, <rule-id>]...): <reason>`";
+    let message = "LNT002 invalid-suppression: malformed suppression; expected `// \
+                   yscope-rust-linter: allow(<rule-id>[, <rule-id>]...): <reason>`";
     assert_eq!(
         stdout_lines(&output),
         [
@@ -160,8 +160,8 @@ fn rule_selection_hides_unused_suppressions_of_disabled_rules() {
     assert_eq!(
         stdout_lines(&output),
         [
-            "a.rs:1:1: unused-suppression: this suppression of errors-doc covers no finding on \
-             line 2; remove it"
+            "a.rs:1:1: LNT003 unused-suppression: this suppression of errors-doc covers no \
+             finding on line 2; remove it"
         ]
     );
 
@@ -181,8 +181,8 @@ fn width_flag_changes_the_fill_threshold() {
     assert_eq!(
         stdout_lines(&output),
         [
-            "a.rs:1:1: comment-greedy-wrap: line is 7 columns wide and the next line's first word \
-             `bbb` (3 columns) fits within 11; move it up"
+            "a.rs:1:1: DOC001 comment-greedy-wrap: line is 7 columns wide and the next line's \
+             first word `bbb` (3 columns) fits within 11; move it up"
         ]
     );
 }
@@ -204,8 +204,8 @@ fn include_tests_flag_checks_test_fns() {
     assert_eq!(
         stdout_lines(&output),
         [
-            "a.rs:7:1: errors-doc: \"Forwards [`load`]\" names a function whose errors `checks` \
-             never forwards"
+            "a.rs:7:1: DOC002 errors-doc: \"Forwards [`load`]\" names a function whose errors \
+             `checks` never forwards"
         ]
     );
 }
@@ -237,12 +237,12 @@ fn syntax_tree_rules_skip_out_of_line_test_modules_unless_tests_are_included() {
     assert_eq!(
         stdout_lines(&output),
         [
-            "src/tests.rs:1:1: type-params-doc: struct `Wrapper` has generic parameters but no `# \
-             Type Parameters` section; add one with a bullet for each of `T`",
-            "src/tests.rs:4:5: trait-params-doc: trait method `load` has parameters but no `# \
-             Parameters` section; add one with a bullet for each of `key`",
-            "src/tests.rs:8:1: symbol-order: pub fn `b` should come after pub trait `Store`: pub \
-             items come before private items",
+            "src/tests.rs:1:1: DOC003 type-params-doc: struct `Wrapper` has generic parameters \
+             but no `# Type Parameters` section; add one with a bullet for each of `T`",
+            "src/tests.rs:4:5: DOC004 trait-params-doc: trait method `load` has parameters but no \
+             `# Parameters` section; add one with a bullet for each of `key`",
+            "src/tests.rs:8:1: ORG001 symbol-order: pub fn `b` should come after pub trait \
+             `Store`: pub items come before private items",
         ]
     );
 }
@@ -253,7 +253,7 @@ fn undecidable_test_module_is_one_parse_error_that_names_the_asking_rules() {
         test_directory("undecidable_test_module_is_one_parse_error_that_names_the_asking_rules");
     write_file(&directory, "dir/mod.rs", "fn broken( {}\n");
     write_file(&directory, "dir/child.rs", "fn f() {}\n");
-    let problem = "dir/child.rs:1:1: parse-error: can't tell whether this file is a \
+    let problem = "dir/child.rs:1:1: LNT001 parse-error: can't tell whether this file is a \
                    `#[cfg(test)]` module: syn failed to parse `dir/mod.rs` (cannot parse string \
                    into token stream);";
     assert_eq!(
@@ -366,8 +366,8 @@ fn diff_that_deletes_a_forwards_bullet_reports_the_missing_forward() {
     assert_eq!(
         stdout_lines(&output),
         [
-            "src/lib.rs:10:11: errors-doc: `load` forwards errors from `read`, but `# Errors` \
-             does not list it; add \"* Forwards [`read`]'s return values on failure.\""
+            "src/lib.rs:10:11: DOC002 errors-doc: `load` forwards errors from `read`, but `# \
+             Errors` does not list it; add \"* Forwards [`read`]'s return values on failure.\""
         ]
     );
 }
@@ -396,8 +396,8 @@ fn diff_that_inserts_a_misplaced_item_reports_the_item_it_displaces() {
     assert_eq!(
         stdout_lines(&output),
         [
-            "src/lib.rs:3:1: symbol-order: pub fn `c` should come after pub fn `a`: pub items \
-             come before private items"
+            "src/lib.rs:3:1: ORG001 symbol-order: pub fn `c` should come after pub fn `a`: pub \
+             items come before private items"
         ]
     );
 }
@@ -423,9 +423,10 @@ fn github_format_renders_workflow_commands() {
     assert_eq!(
         stdout_lines(&output),
         [
-            "::error file=a.rs,line=1,col=1,title=invalid-suppression::unknown rule `nope`; \
-             expected one of comment-greedy-wrap, errors-doc, symbol-order, trait-params-doc, \
-             type-params-doc"
+            "::error file=a.rs,line=1,col=1,title=LNT002 invalid-suppression::unknown rule \
+             `nope`; expected a rule name or code, one of comment-greedy-wrap (DOC001), \
+             errors-doc (DOC002), symbol-order (ORG001), trait-params-doc (DOC004), \
+             type-params-doc (DOC003), or a set, one of DOC, ORG"
         ]
     );
 }
@@ -435,12 +436,14 @@ fn fatal_errors_exit_two_with_empty_stdout() {
     let directory = test_directory("fatal_errors_exit_two_with_empty_stdout");
     write_file(&directory, "a.rs", INVALID_SUPPRESSION);
     write_file(&directory, "dir/b.rs", "");
-    let cases: [&[&str]; 5] = [
+    let cases: [&[&str]; 7] = [
         &[],
         &["a.rs", "missing.rs"],
         &["a.rs:0"],
         &["dir:1-2"],
         &["--rule", "unknown", "a.rs"],
+        &["--rule", "doc001", "a.rs"],
+        &["--rule", "LNT002", "a.rs"],
     ];
     for args in cases {
         let output = run(&directory, args, "");
@@ -493,12 +496,12 @@ fn param_doc_rules_honor_rule_selection_and_suppressions() {
             "type Map<Key> = Vec<Key>;\n",
         ),
     );
-    let type_params_finding = "a.rs:1:1: type-params-doc: struct `Cache` has generic parameters \
-                               but no `# Type Parameters` section; add one with a bullet for each \
-                               of `Value`";
-    let trait_params_finding = "a.rs:5:5: trait-params-doc: trait method `load` has parameters \
-                                but no `# Parameters` section; add one with a bullet for each of \
-                                `key`";
+    let type_params_finding = "a.rs:1:1: DOC003 type-params-doc: struct `Cache` has generic \
+                               parameters but no `# Type Parameters` section; add one with a \
+                               bullet for each of `Value`";
+    let trait_params_finding = "a.rs:5:5: DOC004 trait-params-doc: trait method `load` has \
+                                parameters but no `# Parameters` section; add one with a bullet \
+                                for each of `key`";
     assert_eq!(
         stdout_lines(&run(&directory, &["a.rs"], "")),
         [type_params_finding, trait_params_finding]
@@ -537,8 +540,58 @@ fn diff_that_adds_a_generic_parameter_reports_the_missing_bullet() {
     assert_eq!(
         stdout_lines(&output),
         [
-            "src/lib.rs:3:1: type-params-doc: `# Type Parameters` doesn't document `Codec`; add \
-             \"* `Codec` - ...\""
+            "src/lib.rs:3:1: DOC003 type-params-doc: `# Type Parameters` doesn't document \
+             `Codec`; add \"* `Codec` - ...\""
         ]
     );
+}
+
+#[test]
+fn rule_flag_and_suppressions_accept_codes_and_sets() {
+    let directory = test_directory("rule_flag_and_suppressions_accept_codes_and_sets");
+    write_file(
+        &directory,
+        "a.rs",
+        concat!(
+            "// yscope-rust-linter: allow(DOC003): reason\n",
+            "/// A cache.\n",
+            "pub struct Cache<Value>(Value);\n",
+            "// yscope-rust-linter: allow-item(DOC): reason\n",
+            "/// A map.\n",
+            "pub type Map<Key> = Vec<Key>;\n",
+            "fn a() {}\n",
+            "pub fn b() {}\n",
+        ),
+    );
+    let symbol_order_finding = "a.rs:8:1: ORG001 symbol-order: pub fn `b` should come after pub \
+                                type `Map`: pub items come before private items";
+    for rule in ["ORG", "ORG001", "symbol-order"] {
+        assert_eq!(
+            stdout_lines(&run(&directory, &["--rule", rule, "a.rs"], "")),
+            [symbol_order_finding],
+            "{rule}"
+        );
+    }
+    assert_eq!(
+        stdout_lines(&run(&directory, &["--rule", "DOC", "a.rs"], "")),
+        Vec::<String>::new()
+    );
+
+    let unsuppressed = fs::read_to_string(directory.join("a.rs"))
+        .expect("failed to read the test file")
+        .lines()
+        .filter(|line| !line.contains("yscope-rust-linter:"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    write_file(&directory, "b.rs", &unsuppressed);
+    let codes: Vec<_> = stdout_lines(&run(&directory, &["--rule", "DOC", "b.rs"], ""))
+        .into_iter()
+        .map(|line| {
+            line.split(": ")
+                .nth(1)
+                .expect("a diagnostic has a code")
+                .to_owned()
+        })
+        .collect();
+    assert_eq!(codes, ["DOC003 type-params-doc", "DOC003 type-params-doc"]);
 }

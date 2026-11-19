@@ -141,6 +141,7 @@ impl<'source> FileContext<'source> {
     /// * Suppressions drop the diagnostics they cover, and unused suppressions are reported, as
     ///   [`suppression::Suppressions::apply`] decides with `rule_set`.
     /// * Each malformed or misplaced suppression is an `invalid-suppression` diagnostic.
+    /// * Each deprecated rule that a suppression names is an `unused-suppression` diagnostic.
     ///
     /// # Returns
     ///
@@ -193,6 +194,7 @@ impl<'source> FileContext<'source> {
             rule_set,
         );
         diagnostics.extend(invalid_suppressions);
+        diagnostics.extend(parsed_comments.deprecated_rules);
         diagnostics
     }
 
@@ -290,12 +292,12 @@ fn record(rule_ids: &RefCell<Vec<RuleId>>, rule_id: RuleId) {
 
 /// # Returns
 ///
-/// The IDs of `rule_ids`, in [`RuleId::ALL`] order, separated by `, `.
+/// The names of `rule_ids`, in [`RuleId::ALL`] order, separated by `, `.
 fn joined(rule_ids: &[RuleId]) -> String {
     RuleId::ALL
         .into_iter()
         .filter(|rule_id| rule_ids.contains(rule_id))
-        .map(RuleId::as_str)
+        .map(RuleId::name)
         .collect::<Vec<_>>()
         .join(", ")
 }
@@ -364,7 +366,7 @@ mod tests {
         assert_eq!(
             messages,
             [
-                "parse-error: syn failed to parse the file (cannot parse string into token \
+                "LNT001 parse-error: syn failed to parse the file (cannot parse string into token \
                  stream); errors-doc, type-params-doc are skipped"
             ]
         );

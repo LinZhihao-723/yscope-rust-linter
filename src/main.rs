@@ -30,6 +30,9 @@ use clap::Parser;
 
 fn main() -> ExitCode {
     let cli = cli::Cli::parse();
+    for warning in cli.warnings() {
+        eprintln!("yscope-rust-linter: warning: {warning}");
+    }
     let config = match cli.into_config() {
         Ok(config) => config,
         Err(error) => return report_fatal_error(&error),

@@ -6,9 +6,11 @@ use std::path::PathBuf;
 
 use crate::config::OutputFormat;
 use crate::line_ranges::LineSpan;
+use crate::rules::Code;
+use crate::rules::CodeSet;
 use crate::rules::RuleId;
 
-/// The code printed with a diagnostic: a rule ID, or a meta code that no rule owns.
+/// What a diagnostic reports: a rule's finding, or a meta diagnostic that no rule owns.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DiagnosticCode {
     /// A finding of a lint rule.
@@ -33,13 +35,25 @@ impl DiagnosticCode {
 
     /// # Returns
     ///
-    /// The code as diagnostics print it.
-    pub const fn as_str(self) -> &'static str {
+    /// The name of the rule or meta diagnostic, such as `errors-doc` or `parse-error`.
+    pub const fn name(self) -> &'static str {
         match self {
-            Self::Rule(rule_id) => rule_id.as_str(),
+            Self::Rule(rule_id) => rule_id.name(),
             Self::InvalidSuppression => "invalid-suppression",
             Self::UnusedSuppression => "unused-suppression",
             Self::ParseError => "parse-error",
+        }
+    }
+
+    /// # Returns
+    ///
+    /// The stable code of the rule or meta diagnostic, such as `DOC002` or `LNT001`.
+    pub const fn code(self) -> Code {
+        match self {
+            Self::Rule(rule_id) => rule_id.code(),
+            Self::ParseError => Code::new(CodeSet::Lnt, 1),
+            Self::InvalidSuppression => Code::new(CodeSet::Lnt, 2),
+            Self::UnusedSuppression => Code::new(CodeSet::Lnt, 3),
         }
     }
 
@@ -56,7 +70,7 @@ impl DiagnosticCode {
 
 impl fmt::Display for DiagnosticCode {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(self.as_str())
+        write!(formatter, "{} {}", self.code(), self.name())
     }
 }
 
@@ -162,25 +176,27 @@ impl FileDiagnostic {
     ///
     /// # Returns
     ///
-    /// * For [`OutputFormat::Text`]: `<path>:<line>:<column>: <code>: <message>`.
-    /// * For [`OutputFormat::Github`]: an `::error` workflow command with escaped values.
+    /// * For [`OutputFormat::Text`]: `<path>:<line>:<column>: <code> <name>: <message>`.
+    /// * For [`OutputFormat::Github`]: an `::error` workflow command with escaped values, titled
+    ///   `<code> <name>`.
     pub fn render(&self, format: OutputFormat) -> String {
         let path = self.path.display().to_string();
         let Position { line, column } = self.diagnostic.position();
-        let code = self.diagnostic.code().as_str();
+        let code = self.diagnostic.code().to_string();
         let message = self.diagnostic.message();
         match format {
             OutputFormat::Text => format!("{path}:{line}:{column}: {code}: {message}"),
             OutputFormat::Github => format!(
                 "::error file={},line={line},col={column},title={}::{}",
                 escape_github_property(&path),
-                escape_github_property(code),
+                escape_github_property(&code),
                 escape_github_data(message)
             ),
         }
     }
 
-    /// Compares two diagnostics by path, line, column, code and message, which is the output order.
+    /// Compares two diagnostics by path, line, column, rule or meta name and message, which is the
+    /// output order.
     ///
     /// # Returns
     ///
@@ -192,8 +208,8 @@ impl FileDiagnostic {
             .then_with(|| {
                 self.diagnostic
                     .code
-                    .as_str()
-                    .cmp(other.diagnostic.code.as_str())
+                    .name()
+                    .cmp(other.diagnostic.code.name())
             })
             .then_with(|| self.diagnostic.message.cmp(&other.diagnostic.message))
     }
@@ -260,7 +276,7 @@ mod tests {
         let diagnostic = file_diagnostic("src/a.rs", 3, 5, DiagnosticCode::ParseError, "bad input");
         assert_eq!(
             diagnostic.render(OutputFormat::Text),
-            "src/a.rs:3:5: parse-error: bad input"
+            "src/a.rs:3:5: LNT001 parse-error: bad input"
         );
     }
 
@@ -275,8 +291,8 @@ mod tests {
         );
         assert_eq!(
             diagnostic.render(OutputFormat::Github),
-            "::error file=dir%2Cx/a%3Ab.rs,line=1,col=2,title=errors-doc::100%25 sure:%0D%0Ayes, \
-             really"
+            "::error file=dir%2Cx/a%3Ab.rs,line=1,col=2,title=DOC002 errors-doc::100%25 \
+             sure:%0D%0Ayes, really"
         );
     }
 
@@ -299,14 +315,88 @@ mod tests {
         assert_eq!(
             rendered,
             [
-                "a.rs:1:9: comment-greedy-wrap: z",
-                "a.rs:1:9: errors-doc: a",
-                "a.rs:1:9: errors-doc: z",
-                "a.rs:1:10: parse-error: m",
-                "a.rs:2:1: parse-error: m",
-                "b.rs:1:1: parse-error: m",
+                "a.rs:1:9: DOC001 comment-greedy-wrap: z",
+                "a.rs:1:9: DOC002 errors-doc: a",
+                "a.rs:1:9: DOC002 errors-doc: z",
+                "a.rs:1:10: LNT001 parse-error: m",
+                "a.rs:2:1: LNT001 parse-error: m",
+                "b.rs:1:1: LNT001 parse-error: m",
             ]
         );
+    }
+
+    fn every_code() -> Vec<DiagnosticCode> {
+        RuleId::ALL
+            .into_iter()
+            .map(DiagnosticCode::from)
+            .chain(DiagnosticCode::META)
+            .collect()
+    }
+
+    #[test]
+    fn codes_are_frozen() {
+        let mut table: Vec<_> = every_code()
+            .into_iter()
+            .map(|code| (code.code().to_string(), code.name()))
+            .collect();
+        table.sort_unstable();
+        assert_eq!(
+            table,
+            [
+                ("DOC001".to_owned(), "comment-greedy-wrap"),
+                ("DOC002".to_owned(), "errors-doc"),
+                ("DOC003".to_owned(), "type-params-doc"),
+                ("DOC004".to_owned(), "trait-params-doc"),
+                ("LNT001".to_owned(), "parse-error"),
+                ("LNT002".to_owned(), "invalid-suppression"),
+                ("LNT003".to_owned(), "unused-suppression"),
+                ("ORG001".to_owned(), "symbol-order"),
+            ]
+        );
+    }
+
+    #[test]
+    fn codes_are_well_formed_and_numbered_without_gaps_in_each_set() {
+        for code in every_code() {
+            let text = code.code().to_string();
+            let (prefix, digits) = text.split_at(3);
+            assert_eq!(prefix, code.code().set.prefix(), "{text}");
+            assert!(
+                prefix.len() == 3 && prefix.bytes().all(|byte| byte.is_ascii_uppercase()),
+                "{text}"
+            );
+            assert!(
+                digits.len() == 3 && digits.bytes().all(|byte| byte.is_ascii_digit()),
+                "{text}"
+            );
+            assert_eq!(
+                code.code().set == CodeSet::Lnt,
+                code.rule_id().is_none(),
+                "{text}"
+            );
+        }
+        for set in CodeSet::ALL {
+            let mut numbers: Vec<_> = every_code()
+                .into_iter()
+                .map(DiagnosticCode::code)
+                .filter(|code| code.set == set)
+                .map(|code| code.number)
+                .collect();
+            numbers.sort_unstable();
+            let expected: Vec<u16> = (1..).take(numbers.len()).collect();
+            assert_eq!(numbers, expected, "{}", set.prefix());
+        }
+    }
+
+    #[test]
+    fn codes_and_names_are_unique() {
+        let codes = every_code();
+        for (index, code) in codes.iter().enumerate() {
+            for other in &codes[index + 1..] {
+                assert_ne!(code.code(), other.code());
+                assert_ne!(code.name(), other.name());
+            }
+        }
     }
 
     #[test]
